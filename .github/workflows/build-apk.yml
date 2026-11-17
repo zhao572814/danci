@@ -23,12 +23,14 @@ jobs:
 
       # 用 Kivy 官方 Docker 镜像编译，绕开第三方 buildozer-action 的 chown 权限 bug。
       # 镜像内已备齐 Python / Cython / JDK / Android SDK，首次需联网下载 SDK/NDK。
+      # 关键：官方镜像把项目挂到 /home/user/hostcwd，工作目录也是它——不是 /src。
+      # 入口脚本会读取该目录属主并切成该用户运行，所以不会触发 root 确认。
       - name: 编译 APK（Kivy 官方镜像）
         working-directory: mobile
         run: |
           echo "开始编译，首次约 20 分钟，请耐心等待..."
           df -h . | tail -1
-          yes | docker run --rm -i -v "$PWD:/src" kivy/buildozer:latest android debug
+          printf 'y\n' | docker run --rm -i -v "$PWD:/home/user/hostcwd" kivy/buildozer:latest android debug
 
       # 容器内 root 生成的文件，改回当前用户可读
       - name: 修正产物权限
