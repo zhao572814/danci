@@ -11,18 +11,71 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
+
+# ---------------------------------------------------------------- 崩溃捕获
+# 真机闪退多为启动期 Python 异常，静默崩回桌面看不到原因。
+# 这里设全局钩子：任何未捕获异常都写日志到 App 私有目录，且在屏幕上显示红字，
+# 用户截图即可发回定位——避免像 PDF 项目那样盲猜十几次编译。
+_BOOT_ERR = []          # 收集 import / build 阶段的错误文本
+_CRASH_DIR = ""         # build 后填入可写目录
+
+def _write_crash(text):
+    global _CRASH_DIR
+    for p in (_CRASH_DIR, os.environ.get("VOCAB_DATA_DIR", ""), os.path.expanduser("~")):
+        if not p:
+            continue
+        try:
+            os.makedirs(p, exist_ok=True)
+            with open(os.path.join(p, "crash.txt"), "w", encoding="utf-8") as f:
+                f.write(text)
+            return True
+        except Exception:
+            continue
+    return False
+
+def _excepthook(etype, exc, tb):
+    text = "".join(traceback.format_exception(etype, exc, tb))
+    _BOOT_ERR.append(text)
+    _write_crash(text)
+    sys.__excepthook__(etype, exc, tb)
+
+sys.excepthook = _excepthook
+
+# Kivy 全局异常兜底：页面切换 / 按钮回调里的异常也写日志，不静默退出。
+def _install_kivy_exception_handler():
+    try:
+        from kivy.base import ExceptionManager, ExceptionHandlerBase
+
+        class _CrashHandler(ExceptionHandlerBase):
+            def catch_exception(self, exception):
+                text = "".join(traceback.format_exception(
+                    type(exception), exception, exception.__traceback__))
+                _BOOT_ERR.append(text)
+                _write_crash(text)
+                return False  # 交回 Kivy 默认处理（记录日志），但日志已落盘
+
+        ExceptionManager.add_handler(_CrashHandler())
+    except Exception:
+        pass
 
 # Android 上把数据放到 App 私有目录（/data/data/<pkg>/files），免除存储权限。
 # 必须在 import core 之前设置：db.py / users.py 在 import 时读取该环境变量。
 _IS_ANDROID = sys.platform == "android" or "ANDROID_ARGUMENT" in os.environ
 if _IS_ANDROID:
+    _DATA = ""
     try:
         from android.storage import app_storage_path  # type: ignore
-
         _DATA = os.path.join(app_storage_path(), "vocab_data")
     except Exception:
-        _DATA = os.path.join(os.environ.get("HOME", "/sdcard"), "vocab_data")
+        pass
+    if not _DATA:
+        try:
+            _DATA = os.path.join(os.environ.get("HOME") or "/sdcard", "vocab_data")
+        except Exception:
+            _DATA = "/sdcard/vocab_data"
     os.environ["VOCAB_DATA_DIR"] = _DATA
+    _CRASH_DIR = _DATA
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 if BASE not in sys.path:
@@ -51,13 +104,14 @@ from core.users import UserManager
 from core.models import SCOPE_INBOX, SCOPE_MASTERED
 
 # ---------------------------------------------------------------- 中文字体
-# Android 系统自带 Noto Sans CJK，直接注册系统字体，避免把大文件打进 APK。
+# 优先用打进 APK 的 simhei.ttf（各机型一致，已验证中文正常），系统字体兜底。
 _FONT_REGISTERED = False
 for _fp in (
+    os.path.join(BASE, "assets", "fonts", "simhei.ttf"),
+    os.path.join(os.getcwd(), "assets", "fonts", "simhei.ttf"),
     "/system/fonts/NotoSansCJK-Regular.ttc",
     "/system/fonts/NotoSansCJKsc-Regular.otf",
     "/system/fonts/NotoSansSC-Regular.otf",
-    os.path.join(BASE, "assets", "fonts", "NotoSansSC.ttf"),
 ):
     if os.path.exists(_fp):
         try:
@@ -103,6 +157,20 @@ def _btn(text, bg=C_PRIMARY, color=(1, 1, 1, 1), size=16, height=48, on_press=No
     if on_press:
         b.bind(on_press=on_press)
     return b
+
+
+def error_screen(text):
+    """启动崩溃时显示的红字错误页（可滚动、可截图发回）。"""
+    root = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(10))
+    root.add_widget(_label("启动出错，请把下面红字截图发给我：", 18,
+                           get_color_from_hex("#DC2626"), halign="center"))
+    scroll = ScrollView()
+    detail = _label(text, 13, get_color_from_hex("#B91C1C"))
+    detail.text_size = (dp(340), None)
+    detail.bind(texture_size=detail.setter("size"))
+    scroll.add_widget(detail)
+    root.add_widget(scroll)
+    return root
 
 
 def toast(title, message):
@@ -561,6 +629,8 @@ class SettingsScreen(Screen):
         root.add_widget(self.path_lbl)
         root.add_widget(_btn("切换 / 管理用户", on_press=self.switch_user))
         root.add_widget(_btn("测试朗读（apple）", bg=C_OK, on_press=self.test_tts))
+        root.add_widget(_btn("查看崩溃日志（排查闪退用）", bg=C_LINE, color=C_TEXT,
+                             on_press=self.show_crash))
         root.add_widget(_label("词库本 · 手机版 1.0\n纯离线 · 数据只保存在本机", 13,
                                C_MUTED, halign="center"))
         self.add_widget(root)
@@ -576,6 +646,36 @@ class SettingsScreen(Screen):
     def test_tts(self, *_):
         ok, msg = App.get_running_app().tts.speak("apple")
         toast("朗读测试", "已朗读 apple" if ok else msg)
+
+    def show_crash(self, *_):
+        app = App.get_running_app()
+        text = ""
+        for d in (getattr(app, "data_dir", ""), os.environ.get("VOCAB_DATA_DIR", "")):
+            if not d:
+                continue
+            try:
+                p = os.path.join(d, "crash.txt")
+                if os.path.exists(p):
+                    with open(p, "r", encoding="utf-8") as f:
+                        text = f.read()
+                    break
+            except Exception:
+                pass
+        if not text:
+            text = "\n".join(_BOOT_ERR) or "没有发现崩溃日志（说明没有 Python 层报错）。"
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+        scroll = ScrollView()
+        detail = _label(text, 12, get_color_from_hex("#B91C1C"))
+        detail.text_size = (dp(320), None)
+        detail.bind(texture_size=detail.setter("size"))
+        scroll.add_widget(detail)
+        box.add_widget(scroll)
+        close = _btn("关闭", on_press=lambda *_: None)
+        box.add_widget(close)
+        p = Popup(title="崩溃日志（可截图发我）", content=box,
+                  size_hint=(0.92, 0.85))
+        close.bind(on_press=lambda *_: p.dismiss())
+        p.open()
 
 
 class MainScreen(Screen):
@@ -615,21 +715,33 @@ class MainScreen(Screen):
 class VocabularyApp(App):
     def build(self):
         self.title = "词库本"
-        self.users = UserManager()
-        self.tts = TTS()
-        self.current_user = ""
-        self.db = None
-        self.data_dir = ""
-        sm = ScreenManager(transition=FadeTransition())
-        sm.add_widget(UserScreen(name="users"))
-        sm.add_widget(MainScreen(name="main"))
-        self.sm = sm
-        # 只有一个默认用户时直接进入，省一次点击
-        names = self.users.users()
-        if len(names) == 1:
-            self.switch_user(names[0])
-            sm.current = "main"
-        return sm
+        _install_kivy_exception_handler()
+        try:
+            self.users = UserManager()
+            self.tts = TTS()
+            self.current_user = ""
+            self.db = None
+            self.data_dir = ""
+            sm = ScreenManager(transition=FadeTransition())
+            sm.add_widget(UserScreen(name="users"))
+            sm.add_widget(MainScreen(name="main"))
+            self.sm = sm
+            # 只有一个默认用户时直接进入，省一次点击
+            names = self.users.users()
+            if len(names) == 1:
+                self.switch_user(names[0])
+                sm.current = "main"
+            return sm
+        except Exception:
+            text = "".join(traceback.format_exc())
+            _BOOT_ERR.append(text)
+            _write_crash(text)
+            # 无法用 Kivy 布局时，退回最简 Label 也保证能看到错误
+            try:
+                return error_screen(text)
+            except Exception:
+                return Label(text=text[:2000], font_size=sp(13),
+                             color=get_color_from_hex("#B91C1C"))
 
     def switch_user(self, name):
         self.current_user = name
