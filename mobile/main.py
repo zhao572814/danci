@@ -92,6 +92,7 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.spinner import Spinner
 from kivy.uix.popup import Popup
 from kivy.uix.progressbar import ProgressBar
+from kivy.graphics import Color, Rectangle
 from kivy.core.window import Window
 from kivy.core.text import LabelBase
 from kivy.metrics import dp, sp
@@ -157,6 +158,28 @@ def _btn(text, bg=C_PRIMARY, color=(1, 1, 1, 1), size=16, height=48, on_press=No
     if on_press:
         b.bind(on_press=on_press)
     return b
+
+
+class CardBox(BoxLayout):
+    """带背景色的卡片容器。
+
+    Kivy 原生 BoxLayout 没有 background_color 属性，直接传会抛
+    TypeError（真机启动闪退）。这里用 canvas.before 画一块矩形实现背景，
+    并跟随 pos/size 变化更新，缩放时不留残影。
+    """
+    def __init__(self, **kw):
+        bg = kw.pop("background_color", (1, 1, 1, 1))
+        super().__init__(**kw)
+        self._bg_rect = None
+        with self.canvas.before:
+            Color(*bg)
+            self._bg_rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync_bg, size=self._sync_bg)
+
+    def _sync_bg(self, *_):
+        if self._bg_rect is not None:
+            self._bg_rect.pos = self.pos
+            self._bg_rect.size = self.size
 
 
 def error_screen(text):
@@ -460,8 +483,8 @@ class StudyScreen(Screen):
         root.add_widget(self.progress)
         self.count = _label("待背 0 条", 14, C_MUTED, halign="center")
         root.add_widget(self.count)
-        self.card = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(16),
-                              size_hint=(1, 0.55), background_color=C_CARD)
+        self.card = CardBox(orientation="vertical", spacing=dp(10), padding=dp(16),
+                            size_hint=(1, 0.55), background_color=C_CARD)
         self.prompt = _label("", 24, C_PRIMARY, halign="center", valign="middle")
         self.prompt.text_size = (dp(320), None)
         self.extra = _label("", 15, C_MUTED, halign="center")
