@@ -93,7 +93,7 @@ def _show_crash_overlay(text):
                 detail.bind(texture_size=detail.setter("size"))
                 scroll.add_widget(detail)
                 box.add_widget(scroll)
-                Popup(title="崩溃信息", content=box, size_hint=(0.94, 0.9)).open()
+                Popup(title="崩溃信息", title_font=FONT, content=box, size_hint=(0.94, 0.9)).open()
                 return
             except Exception:
                 pass
@@ -329,10 +329,29 @@ def toast(title, message):
     box.add_widget(lbl)
     ok = _btn("好的", on_press=lambda *_: None)
     box.add_widget(ok)
-    p = Popup(title=title, content=box, size_hint=(0.85, None), height=dp(190))
+    p = Popup(title=title, title_font=FONT, content=box, size_hint=(0.85, None), height=dp(190))
     ok.bind(on_press=lambda *_: p.dismiss())
     p.open()
     return p
+
+
+def flash(message, title="提示", dur=1.8):
+    """自动消失的轻提示，不挡操作。朗读这类即时反馈用它可以避免「点了没反应」。"""
+    try:
+        box = BoxLayout(orientation="vertical", padding=dp(14))
+        lbl = _label(message, 15)
+        lbl.text_size = (dp(280), None)
+        box.add_widget(lbl)
+        p = Popup(title=title, title_font=FONT, content=box,
+                  size_hint=(0.8, None), height=dp(150))
+        p.open()
+        try:
+            Clock.schedule_once(lambda *_: p.dismiss(), dur)
+        except Exception:
+            pass
+        return p
+    except Exception:
+        return None
 
 
 def confirm(title, message, on_yes):
@@ -346,40 +365,138 @@ def confirm(title, message, on_yes):
     row.add_widget(yes)
     row.add_widget(no)
     box.add_widget(row)
-    p = Popup(title=title, content=box, size_hint=(0.85, None), height=dp(240))
+    p = Popup(title=title, title_font=FONT, content=box, size_hint=(0.85, None), height=dp(240))
     yes.bind(on_press=lambda *_: (p.dismiss(), on_yes()))
     no.bind(on_press=lambda *_: p.dismiss())
     p.open()
     return p
 
 
+def _read_text_path(path):
+    """把文件选择器给出的路径读成文本。
+    plyer 在安卓上可能只回传文件名而非完整路径（尤其从「下载」选的），
+    所以先直读，失败再依次到常见目录按文件名找。返回 (文本, 错误)。"""
+    if not path or not isinstance(path, str):
+        return "", "没有拿到有效文件路径"
+    candidates = [path]
+    base = os.path.basename(path)
+    for d in ("/storage/emulated/0/Download", "/sdcard/Download",
+              "/storage/emulated/0/Documents", os.path.expanduser("~")):
+        candidates.append(os.path.join(d, base))
+    tried = []
+    for c in candidates:
+        try:
+            with open(c, "r", encoding="utf-8-sig", errors="replace") as f:
+                return f.read(), ""
+        except Exception as e:
+            tried.append(f"{c}: {type(e).__name__}")
+    return "", "读不到文件（" + "; ".join(tried[:2]) + "）。若是从微信/网盘打开，请先把文件存到「下载」目录再选，或用复制粘贴。"
+
+
+def pick_text_file(on_text):
+    """弹出系统文件选择器，选中的 TXT 读成文本后回调 on_text(text)。"""
+    try:
+        from plyer import filechooser  # type: ignore
+    except Exception as e:
+        toast("文件导入", f"当前环境不支持文件选择：{e}。请用复制粘贴。")
+        return
+    def _selected(selection):
+        try:
+            path = None
+            if isinstance(selection, (list, tuple)) and selection:
+                path = selection[0]
+            elif isinstance(selection, str):
+                path = selection
+            text, err = _read_text_path(path)
+            if err:
+                toast("文件导入", err)
+                return
+            if not text.strip():
+                toast("文件导入", "这个文件内容是空的")
+                return
+            on_text(text)
+        except Exception as e:
+            toast("文件导入", f"读取文件出错：{e}")
+    try:
+        filechooser.open_file(title="选择 TXT 文件", filters=["*.txt", "*.TXT"],
+                              on_selection=_selected)
+    except Exception as e:
+        # 某些机型 filters 参数不兼容，退化为不过滤再试一次
+        try:
+            filechooser.open_file(on_selection=_selected)
+        except Exception as e2:
+            toast("文件导入", f"打不开文件选择器：{e2}。请用复制粘贴。")
+
+
 class TTS:
-    """安卓系统朗读；桌面/无 TTS 环境降级为静默并给出提示。"""
+    """安卓系统朗读（直接用系统 TextToSpeech）。
+
+    不用 plyer.tts：它的安卓实现会在引擎未就绪时空转 100 次 ×0.1 秒（卡 UI 10 秒），
+    且失败后一声不响——表现就是「点了朗读啥也没有」。这里：
+    · 单例复用引擎，只初始化一次；
+    · setLanguage 前先看引擎是否就绪，就绪了再朗读；
+    · 用短重试（最多 ~1 秒）不卡界面；
+    · 明确返回成功/失败原因，界面弹提示。
+    """
 
     def __init__(self):
         self._engine = None
-        self._ready = False
+        self._TTSS = None
+        self._Locale = None
+        self._tried = False
+        self._last_error = ""
 
     def _init(self):
-        if self._ready:
+        if self._tried:
             return
+        self._tried = True
         try:
-            from plyer import tts  # type: ignore
-
-            self._engine = tts
-            self._ready = True
-        except Exception:
-            self._ready = True
-
-    def speak(self, word: str):
-        self._init()
-        if not self._engine:
-            return False, "当前环境不支持朗读"
-        try:
-            self._engine.speak(message=word)
-            return True, ""
+            from jnius import autoclass  # type: ignore
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+            Locale = autoclass("java.util.Locale")
+            activity = PythonActivity.mActivity
+            if not activity:
+                self._last_error = "拿不到安卓 Activity，无法朗读"
+                return
+            self._engine = TextToSpeech(activity, None)
+            self._TTSS = TextToSpeech
+            self._Locale = Locale
         except Exception as e:
-            return False, f"朗读失败：{e}"
+            self._last_error = f"系统朗读引擎不可用：{e}"
+
+    def speak(self, word: str, on_fail=None):
+        """发起朗读，立即返回不阻塞界面。引擎没就绪时用 Clock 短重试，
+        最终失败通过 on_fail(msg) 回调弹提示（避免「点了没反应」）。"""
+        self._init()
+        if self._engine is None:
+            msg = self._last_error or "这台设备没有可用的朗读引擎"
+            if on_fail:
+                on_fail(msg)
+            return False, msg
+        state = {"tries": 0}
+        Q = self._TTSS.QUEUE_FLUSH
+
+        def attempt(_dt=0):
+            try:
+                status = self._engine.speak(str(word), Q, None)
+            except Exception as e:
+                if on_fail:
+                    on_fail(f"朗读失败：{e}")
+                return
+            if status == 0:  # TextToSpeech.SUCCESS
+                return
+            state["tries"] += 1
+            if state["tries"] < 6:
+                try:
+                    Clock.schedule_once(attempt, 0.25)
+                except Exception:
+                    pass
+            elif on_fail:
+                on_fail("朗读引擎还没准备好，请稍后再点一次；或到手机设置里确认已安装语音引擎")
+
+        attempt()
+        return True, ""
 
 
 # ------------------------------------------------------------------ 页面
@@ -437,7 +554,7 @@ class UserScreen(Screen):
         box.add_widget(ti)
         ok = _btn("创建")
         box.add_widget(ok)
-        p = Popup(title="新建用户", content=box, size_hint=(0.85, None), height=dp(200))
+        p = Popup(title="新建用户", title_font=FONT, content=box, size_hint=(0.85, None), height=dp(200))
 
         def create(*_):
             ok_name, msg = App.get_running_app().users.add_user(ti.text)
@@ -466,8 +583,10 @@ class DictScreen(Screen):
         root.add_widget(self.text)
         row = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(48))
         row.add_widget(_btn("导入粘贴", on_press=self.import_text))
-        row.add_widget(_btn("植入内置词库", bg=C_OK, on_press=self.install_builtin))
+        row.add_widget(_btn("导入TXT文件", bg=C_LINE, color=C_TEXT,
+                            on_press=self.import_file))
         root.add_widget(row)
+        root.add_widget(_btn("植入内置词库", bg=C_OK, on_press=self.install_builtin))
         root.add_widget(_btn("打开内置词库说明", bg=C_LINE, color=C_TEXT,
                              on_press=self.help_builtin))
         self.add_widget(root)
@@ -494,6 +613,17 @@ class DictScreen(Screen):
         self.refresh()
         toast("导入完成", msg)
 
+    def import_file(self, *_):
+        def _got(text):
+            items = parse_entry_lines(text)
+            if not items:
+                toast("文件导入", "没从这个 TXT 里解析出词条，请确认每行是「单词 释义」格式")
+                return
+            n, msg = App.get_running_app().db.import_entries(items, source="txt_file")
+            self.refresh()
+            toast("导入完成", msg)
+        pick_text_file(_got)
+
     def install_builtin(self, *_):
         def do():
             app = App.get_running_app()
@@ -515,17 +645,19 @@ class ImportScreen(Screen):
         root = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(14))
         root.add_widget(_label("粘贴要背的英文文本 / 文章", 16))
         self.text = TextInput(font_name=FONT, font_size=sp(15), multiline=True,
-                              hint_text="把英文段落粘贴到这里，程序会从基础词库里挑出要背的单词和短语",
-                              size_hint=(1, 0.35), background_color=C_CARD,
+                              hint_text="把英文段落粘贴到这里，或从 TXT 文件读入",
+                              size_hint=(1, 0.3), background_color=C_CARD,
                               foreground_color=C_TEXT)
         root.add_widget(self.text)
         opt = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(44))
-        self.chk_stop = Button(text="过滤常见虚词：关", font_name=FONT, font_size=sp(13),
+        opt.add_widget(_btn("导入TXT文件", bg=C_LINE, color=C_TEXT, size=14,
+                            on_press=self.import_file))
+        self.chk_stop = Button(text="过滤虚词：关", font_name=FONT, font_size=sp(12),
                                background_color=C_LINE, color=C_TEXT,
                                size_hint_y=None, height=dp(44))
         self.chk_stop.bind(on_press=self.toggle_stop)
         opt.add_widget(self.chk_stop)
-        opt.add_widget(_btn("识别文本", bg=C_OK, on_press=self.recognize))
+        opt.add_widget(_btn("识别文本", bg=C_OK, size=14, on_press=self.recognize))
         root.add_widget(opt)
         self.hint = _label("识别后在此勾选要背的条目", 13, C_MUTED)
         root.add_widget(self.hint)
@@ -541,12 +673,18 @@ class ImportScreen(Screen):
 
     def toggle_stop(self, *_):
         self.filter_stop = not self.filter_stop
-        self.chk_stop.text = f"过滤常见虚词：{'开' if self.filter_stop else '关'}"
+        self.chk_stop.text = f"过滤虚词：{'开' if self.filter_stop else '关'}"
+
+    def import_file(self, *_):
+        def _got(text):
+            self.text.text = text
+            toast("文件读入", f"已读入 {len(text)} 个字符，点「识别文本」继续")
+        pick_text_file(_got)
 
     def recognize(self, *_):
         app = App.get_running_app()
         if not app.db or not self.text.text.strip():
-            toast("识别", "请先粘贴文本")
+            toast("识别", "请先粘贴文本或导入 TXT 文件")
             return
         phrases = app.db.phrase_headwords()
         items = detect_items(self.text.text, phrases,
@@ -595,14 +733,21 @@ class StudyScreen(Screen):
     def __init__(self, **kw):
         super().__init__(**kw)
         root = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(14))
-        top = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(44))
-        self.mode = Spinner(text="读音背诵",
-                            values=("读音背诵", "看中文背诵", "查看模式"),
-                            font_name=FONT, font_size=sp(14),
-                            background_color=C_LINE, color=C_TEXT,
-                            size_hint_y=None, height=dp(44))
-        self.mode.bind(text=lambda *_: self.restart())
-        top.add_widget(self.mode)
+        # 三种模式做成看得见的一排按钮（真机上 Spinner 常被渲染成灰块，用户找不到）
+        self.MODES = ("读音背诵", "看中文背诵", "查看模式")
+        class _ModeHolder:
+            text = self.MODES[0]
+        self.mode = _ModeHolder()  # 用对象持有当前模式文字，兼容 self.mode.text 读取
+        modes_row = BoxLayout(spacing=dp(6), size_hint_y=None, height=dp(46))
+        self.mode_btns = []
+        for i, mt in enumerate(self.MODES):
+            b = _btn(mt, bg=C_PRIMARY if i == 0 else C_LINE,
+                     color=(1, 1, 1, 1) if i == 0 else C_TEXT,
+                     size=13, height=46, on_press=lambda _, m=mt: self.set_mode(m))
+            self.mode_btns.append(b)
+            modes_row.add_widget(b)
+        root.add_widget(modes_row)
+        top = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(40))
         top.add_widget(_btn("重新开始", bg=C_LINE, color=C_TEXT, on_press=self.restart))
         root.add_widget(top)
         self.progress = ProgressBar(max=1, value=0, size_hint_y=None, height=dp(10))
@@ -611,7 +756,8 @@ class StudyScreen(Screen):
         root.add_widget(self.count)
         self.card = CardBox(orientation="vertical", spacing=dp(10), padding=dp(16),
                             size_hint=(1, 0.55), background_color=C_CARD)
-        self.prompt = _label("", 24, C_PRIMARY, halign="center", valign="middle")
+        self.prompt = _label("", 24, C_PRIMARY, halign="center", valign="middle",
+                             size_hint_y=1)  # 撑满卡片并垂直居中，消除上方大块空白
         self.prompt.text_size = (dp(320), None)
         self.extra = _label("", 15, C_MUTED, halign="center")
         self.extra.text_size = (dp(320), None)
@@ -623,7 +769,7 @@ class StudyScreen(Screen):
                                 foreground_color=C_TEXT)
         self.card.add_widget(self.answer)
         speak_row = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(46))
-        speak_row.add_widget(_btn("♪ 朗读", bg=C_OK, on_press=self.speak))
+        speak_row.add_widget(_btn("朗读", bg=C_OK, on_press=self.speak))
         speak_row.add_widget(_btn("确认", on_press=self.check))
         self.card.add_widget(speak_row)
         root.add_widget(self.card)
@@ -637,6 +783,14 @@ class StudyScreen(Screen):
         self.words = []
         self.idx = 0
         self.current = None
+
+    def set_mode(self, m):
+        self.mode.text = m
+        for b, mt in zip(self.mode_btns, self.MODES):
+            active = (mt == m)
+            b.background_color = C_PRIMARY if active else C_LINE
+            b.color = (1, 1, 1, 1) if active else C_TEXT
+        self.restart()
 
     def on_enter(self):
         set_stage("背诵页:on_enter")
@@ -653,7 +807,7 @@ class StudyScreen(Screen):
 
     def show(self):
         if self.idx >= len(self.words):
-            self.prompt.text = "🎉 待背词库已全部完成"
+            self.prompt.text = "待背词库已全部完成"
             self.extra.text = "可以回到「识别文本」导入新词，或在已背词库查看成果"
             self.count.text = "待背 0 条"
             self.progress.value = 1
@@ -667,7 +821,7 @@ class StudyScreen(Screen):
         self.count.text = f"待背 {len(self.words) - self.idx} 条 · 第 {self.idx + 1}/{len(self.words)}"
         mode = self.mode.text
         if mode == "读音背诵":
-            self.prompt.text = "♪ 点击朗读，听发音后拼写单词"
+            self.prompt.text = "点击朗读，听发音后拼写单词"
             self.extra.text = "输入你听到的英文单词"
         elif mode == "看中文背诵":
             self.prompt.text = self.current.get("translation") or "（该词暂无释义）"
@@ -685,13 +839,13 @@ class StudyScreen(Screen):
     def speak(self, *_):
         if not self.current:
             return
-        if self.mode.text == "查看模式":
-            word = self.current.get("word", "")
-        else:
-            word = self.current.get("word", "")
-        ok, msg = App.get_running_app().tts.speak(word)
-        if not ok:
-            toast("朗读", msg)
+        word = self.current.get("word", "")
+        if not word:
+            flash("这个词没有读音内容", "朗读")
+            return
+        flash("正在朗读：" + word, "朗读", dur=1.2)
+        App.get_running_app().tts.speak(
+            word, on_fail=lambda m: flash(m, "朗读未成功"))
 
     def check(self, *_):
         if not self.current:
@@ -796,8 +950,9 @@ class SettingsScreen(Screen):
         App.get_running_app().stop_user_and_show_users()
 
     def test_tts(self, *_):
-        ok, msg = App.get_running_app().tts.speak("apple")
-        toast("朗读测试", "已朗读 apple" if ok else msg)
+        flash("正在朗读：apple", "朗读测试", dur=1.2)
+        App.get_running_app().tts.speak(
+            "apple", on_fail=lambda m: flash(m, "朗读未成功"))
 
     def show_crash(self, *_):
         app = App.get_running_app()
@@ -830,7 +985,7 @@ class SettingsScreen(Screen):
         box.add_widget(scroll)
         close = _btn("关闭", on_press=lambda *_: None)
         box.add_widget(close)
-        p = Popup(title="崩溃日志（可截图发我）", content=box,
+        p = Popup(title="崩溃日志（可截图发我）", title_font=FONT, content=box,
                   size_hint=(0.92, 0.85))
         close.bind(on_press=lambda *_: p.dismiss())
         p.open()

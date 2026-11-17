@@ -13,8 +13,9 @@ source.exclude_dirs = data, __pycache__, build, bin
 
 version = 1.0.0
 
-# 依赖：Kivy 做界面，plyer 调用安卓系统朗读（TTS）。pyjnius 由 p4a 自动带上。
-requirements = python3,kivy,plyer
+# 依赖：Kivy 做界面；plyer 提供文件选择器，pyjnius 直接调系统 TTS（朗读）。
+# pyjnius 显式列出，避免 p4a 版本差异导致 import jnius 失败。
+requirements = python3,kivy,plyer,pyjnius
 
 # 竖屏、非全屏（保留状态栏，华为手机上更稳）
 orientation = portrait
