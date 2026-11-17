@@ -14,35 +14,90 @@ import sys
 import traceback
 
 # ---------------------------------------------------------------- 崩溃捕获
-# 真机闪退多为启动期 Python 异常，静默崩回桌面看不到原因。
-# 这里设全局钩子：任何未捕获异常都写日志到 App 私有目录，且在屏幕上显示红字，
-# 用户截图即可发回定位——避免像 PDF 项目那样盲猜十几次编译。
-_BOOT_ERR = []          # 收集 import / build 阶段的错误文本
-_CRASH_DIR = ""         # build 后填入可写目录
+# 真机闪退多为 Python 异常，静默崩回桌面看不到原因。
+# 关键教训：红字屏若只包 build()，启动后的 on_enter / 按钮回调报错时不会出现，
+# 表现为「闪退但没有提示页」。这里做全周期捕获：任何异常都写日志 + 叠加红字层。
+_BOOT_ERR = []          # 收集所有阶段的错误文本
+_CRASH_DIR = ""         # Android 分支填入可写目录
+_STAGE = "模块加载"      # 当前启动阶段，便于定位卡在哪一步
+
+def set_stage(s):
+    """记录启动进度到 stage.txt，即使原生层崩溃也能看出走到哪一步。"""
+    global _STAGE
+    _STAGE = s
+    try:
+        d = _CRASH_DIR or os.environ.get("VOCAB_DATA_DIR", "")
+        if d:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "stage.txt"), "w", encoding="utf-8") as f:
+                f.write(s)
+    except Exception:
+        pass
+
+def _crash_paths():
+    return (_CRASH_DIR, os.environ.get("VOCAB_DATA_DIR", ""), os.path.expanduser("~"))
 
 def _write_crash(text):
-    global _CRASH_DIR
-    for p in (_CRASH_DIR, os.environ.get("VOCAB_DATA_DIR", ""), os.path.expanduser("~")):
+    for p in _crash_paths():
         if not p:
             continue
         try:
             os.makedirs(p, exist_ok=True)
             with open(os.path.join(p, "crash.txt"), "w", encoding="utf-8") as f:
-                f.write(text)
+                f.write(f"=== 阶段：{_STAGE} ===\n" + text)
             return True
         except Exception:
             continue
     return False
 
-def _excepthook(etype, exc, tb):
-    text = "".join(traceback.format_exception(etype, exc, tb))
+def _record_crash(text):
+    """统一入口：收集 + 落盘 + 尽量显示红字层。"""
     _BOOT_ERR.append(text)
     _write_crash(text)
+    _show_crash_overlay(text)
+
+def _show_crash_overlay(text):
+    """把错误直接叠加到窗口最上层，不依赖 build() 是否成功。
+    on_enter / 按钮回调里的异常也能显示——这是上次缺失的一环。"""
+    try:
+        from kivy.core.window import Window
+        if getattr(Window, "_vocab_crash_shown", False):
+            return
+        Window._vocab_crash_shown = True
+        from kivy.uix.boxlayout import BoxLayout as _BL
+        from kivy.uix.scrollview import ScrollView as _SV
+        from kivy.utils import get_color_from_hex as _g
+        from kivy.graphics import Color as _Color, Rectangle as _Rectangle
+        lay = _BL(orientation="vertical", padding=dp(12), spacing=dp(8))
+        with lay.canvas.before:
+            _Color(0, 0, 0, 1)
+            bg = _Rectangle(pos=lay.pos, size=lay.size)
+        def _sync(*_):
+            bg.pos = lay.pos
+            bg.size = lay.size
+        lay.bind(pos=_sync, size=_sync)
+        tip = _label(f"[{_STAGE}] 出错了，请截图发我：", 17, _g("#FF6B6B"))
+        tip.text_size = (max(200, Window.width - 24), None)
+        lay.add_widget(tip)
+        scroll = _SV()
+        detail = _label(text[:6000], 12, _g("#FFFFFF"))
+        detail.text_size = (max(200, Window.width - 24), None)
+        detail.bind(texture_size=detail.setter("size"))
+        scroll.add_widget(detail)
+        lay.add_widget(scroll)
+        Window.add_widget(lay)
+    except Exception:
+        pass
+
+def _excepthook(etype, exc, tb):
+    text = "".join(traceback.format_exception(etype, exc, tb))
+    _record_crash(text)
     sys.__excepthook__(etype, exc, tb)
 
 sys.excepthook = _excepthook
 
-# Kivy 全局异常兜底：页面切换 / 按钮回调里的异常也写日志，不静默退出。
+# Kivy 全局异常兜底：on_enter / 按钮回调里的异常也显示红字，且吞掉不再抛出。
+# 返回 True 是关键——返回 False 会让 Kivy 重新抛出异常导致静默闪退。
 def _install_kivy_exception_handler():
     try:
         from kivy.base import ExceptionManager, ExceptionHandlerBase
@@ -51,9 +106,8 @@ def _install_kivy_exception_handler():
             def catch_exception(self, exception):
                 text = "".join(traceback.format_exception(
                     type(exception), exception, exception.__traceback__))
-                _BOOT_ERR.append(text)
-                _write_crash(text)
-                return False  # 交回 Kivy 默认处理（记录日志），但日志已落盘
+                _record_crash(text)
+                return True  # 吞掉，避免 Kivy 重新抛出造成闪退
 
         ExceptionManager.add_handler(_CrashHandler())
     except Exception:
@@ -513,14 +567,17 @@ class StudyScreen(Screen):
         self.current = None
 
     def on_enter(self):
+        set_stage("背诵页:on_enter")
         if not self.words:
             self.restart()
 
     def restart(self, *_):
+        set_stage("背诵页:restart查询待背词")
         app = App.get_running_app()
         self.words = app.db.list_words(SCOPE_INBOX) if app.db else []
         self.idx = 0
         self.show()
+        set_stage("背诵页:显示完成")
 
     def show(self):
         if self.idx >= len(self.words):
@@ -740,20 +797,24 @@ class VocabularyApp(App):
         self.title = "词库本"
         _install_kivy_exception_handler()
         try:
+            set_stage("build:创建用户管理")
             self.users = UserManager()
             self.tts = TTS()
             self.current_user = ""
             self.db = None
             self.data_dir = ""
+            set_stage("build:创建界面")
             sm = ScreenManager(transition=FadeTransition())
             sm.add_widget(UserScreen(name="users"))
             sm.add_widget(MainScreen(name="main"))
             self.sm = sm
+            set_stage("build:切换用户")
             # 只有一个默认用户时直接进入，省一次点击
             names = self.users.users()
             if len(names) == 1:
                 self.switch_user(names[0])
                 sm.current = "main"
+            set_stage("build:完成")
             return sm
         except Exception:
             text = "".join(traceback.format_exc())
