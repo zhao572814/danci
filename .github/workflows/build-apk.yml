@@ -15,12 +15,16 @@ jobs:
         uses: actions/checkout@v4
 
       # 缓存 SDK/NDK：第二次之后从约 20 分钟降到约 5 分钟
+      # 注意：不缓存 python-for-android 目录，避免把残缺的 p4a（无 origin remote）
+      # 恢复进下次构建导致 git 检查失败。p4a 每次让 buildozer 全新 clone。
       - name: 缓存 SDK / NDK
         uses: actions/cache@v4
         with:
-          path: mobile/.buildozer
-          # v2：spec 改动 + 缓存版本升级，强制丢弃之前失败构建留下的不完整 SDK 缓存
-          key: buildozer-v2-${{ runner.os }}-${{ hashFiles('mobile/buildozer.spec') }}
+          path: |
+            mobile/.buildozer/android/platform/android-sdk
+            mobile/.buildozer/android/platform/android-ndk-*
+          # v3：排除 p4a 目录，强制全新 clone，彻底规避残缺 p4a 反复作祟
+          key: buildozer-v3-${{ runner.os }}-${{ hashFiles('mobile/buildozer.spec') }}
 
       # 用 Kivy 官方 Docker 镜像编译，绕开第三方 buildozer-action 的 chown 权限 bug。
       # 镜像内已备齐 Python / Cython / JDK / Android SDK，首次需联网下载 SDK/NDK。

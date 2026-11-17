@@ -61,20 +61,35 @@ echo "当前已安装平台："
 ls -1 "$SDK/platforms" 2>/dev/null || echo "  (仍为空)"
 
 # ------------------------------------------------------------------
-# 修复残缺的 p4a 目录：
-# 第一次运行 buildozer 在很早期就因缺 platform 失败，此时 python-for-android
-# 目录可能只下载了一部分（存在但没有 .git）。第二次编译 buildozer 会执行
-#   git config --get remote.origin.url  和  git branch -vv  检查 url/branch，
-# 目录不是完整 git 仓库时该命令返回码 1 → 编译中断（本次失败真因）。
-# 对策：删掉残缺目录，让 buildozer 用 git clone 重新完整拉取（默认 master 分支）。
+# 修复 p4a 目录的 git 元数据（本轮反复失败的真因）：
+# buildozer 在 p4a 目录存在时会执行
+#   git config --get remote.origin.url   和   git branch -vv
+# 比对 url/branch。缓存恢复的 p4a 目录可能「有 .git 但没配 origin」，
+# 或整个目录残缺 → git 命令返回码 1 → buildozer 无容错直接中断。
+# 对策：
+#   - 源码完整（有 pythonforandroid/ 包）→ 就地修好 git 元数据（最快，保留 SDK 缓存）
+#   - 源码残缺 → 删除，让 buildozer 重新 git clone（默认 master 分支）
 # ------------------------------------------------------------------
 P4A_DIR="/home/user/hostcwd/.buildozer/android/platform/python-for-android"
-if [ -d "$P4A_DIR" ] && [ ! -d "$P4A_DIR/.git" ]; then
-  echo "########## 检测到残缺 p4a 目录，删除以便重新完整拉取 ##########"
+if [ -d "$P4A_DIR" ] && [ -d "$P4A_DIR/pythonforandroid" ]; then
+  echo "########## 修复 p4a 目录 git 元数据 ##########"
+  cd "$P4A_DIR" || exit 1
+  git rev-parse --git-dir >/dev/null 2>&1 || git init -q
+  git config user.name "BuildBot"
+  git config user.email "build@local"
+  git remote remove origin 2>/dev/null
+  git remote add origin https://github.com/kivy/python-for-android.git
+  # git branch -vv 需要至少一个 commit，否则取分支名会失败
+  if ! git rev-parse HEAD >/dev/null 2>&1; then
+    git add -A >/dev/null 2>&1
+    git commit -qm "local p4a snapshot" >/dev/null 2>&1
+  fi
+  git branch -M master >/dev/null 2>&1
+  echo "p4a git 就绪: url=$(git config --get remote.origin.url) branch=$(git branch --show-current)"
+  cd /home/user/hostcwd || exit 1
+elif [ -d "$P4A_DIR" ]; then
+  echo "########## p4a 源码残缺，删除以便重新完整 clone ##########"
   rm -rf "$P4A_DIR"
-  echo "已删除：$P4A_DIR"
-elif [ -d "$P4A_DIR/.git" ]; then
-  echo "p4a 目录是完整 git 仓库，保留"
 else
   echo "p4a 目录不存在，buildozer 会自动 clone"
 fi
