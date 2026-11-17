@@ -63,6 +63,9 @@ if errorlevel 1 (
 )
 
 REM ---------- 4. 提交代码 ----------
+REM 清理上一轮失败留下的上传日志：取消追踪并删除，避免误传到公开仓库
+git rm --cached "upload_result.log" >nul 2>nul
+del "upload_result.log" >nul 2>nul
 echo [3/5] 正在保存改动...
 git add -A
 git diff --cached --quiet
