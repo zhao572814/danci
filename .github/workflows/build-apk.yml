@@ -28,7 +28,7 @@ jobs:
         run: |
           echo "开始编译，首次约 20 分钟，请耐心等待..."
           df -h . | tail -1
-          docker run --rm -v "$PWD:/src" kivy/buildozer:latest android debug
+          yes | docker run --rm -i -v "$PWD:/src" kivy/buildozer:latest android debug
 
       # 容器内 root 生成的文件，改回当前用户可读
       - name: 修正产物权限

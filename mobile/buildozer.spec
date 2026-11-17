@@ -41,7 +41,7 @@ android.allow_backup = True
 [buildozer]
 
 log_level = 2
-warn_on_root = 1
+warn_on_root = 0
 
 # 首次构建会联网下载 Android SDK/NDK（约 1~2GB），只在 GitHub 云端发生，
 # 之后用缓存；本机不装任何东西。
