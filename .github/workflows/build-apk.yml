@@ -19,14 +19,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: mobile/.buildozer
-          key: buildozer-${{ runner.os }}-${{ hashFiles('mobile/buildozer.spec') }}
+          # v2：spec 改动 + 缓存版本升级，强制丢弃之前失败构建留下的不完整 SDK 缓存
+          key: buildozer-v2-${{ runner.os }}-${{ hashFiles('mobile/buildozer.spec') }}
 
       # 用 Kivy 官方 Docker 镜像编译，绕开第三方 buildozer-action 的 chown 权限 bug。
       # 镜像内已备齐 Python / Cython / JDK / Android SDK，首次需联网下载 SDK/NDK。
       # 关键：官方镜像把项目挂到 /home/user/hostcwd，工作目录也是它——不是 /src。
       # 入口脚本会读取该目录属主并切成该用户运行，所以不会触发 root 确认。
       # 编译偶发会因网络抖动失败，故失败后自动重试一次；完整日志存文件便于排错。
-      - name: 编译 APK（Kivy 官方镜像，失败自动重试一次）
+      - name: 编译 APK（补装 SDK platform + 失败自动重试一次）
         working-directory: mobile
         run: |
           echo "开始编译，首次约 20 分钟，请耐心等待..."
@@ -35,15 +36,19 @@ jobs:
           ok=0
           for attempt in 1 2; do
             echo "===== 第 $attempt 次编译尝试 ====="
-            printf 'y\n' | docker run --rm -i -v "$PWD:/home/user/hostcwd" kivy/buildozer:latest android debug 2>&1 | tee "build_log_$attempt.txt"
-            rc=${PIPESTATUS[1]}
+            # 用 --entrypoint bash 直接跑构建脚本：脚本会先补装 Android platform 再编译，
+            # 绕开新版 p4a "Available Android APIs are ()" 的上游 bug。
+            docker run --rm -i -v "$PWD:/home/user/hostcwd" \
+              --entrypoint bash kivy/buildozer:latest \
+              /home/user/hostcwd/build_android.sh 2>&1 | tee "build_log_$attempt.txt"
+            rc=${PIPESTATUS[0]}
             echo "本次编译退出码: $rc"
             if [ "$rc" = "0" ]; then
               ok=1
               break
             fi
             if [ "$attempt" = "1" ]; then
-              echo "第一次失败，可能是网络抖动，5 秒后自动重试一次..."
+              echo "第一次失败，5 秒后自动重试一次..."
               sleep 5
             fi
           done

@@ -23,12 +23,13 @@ fullscreen = 0
 # 不需要任何权限：不联网、不读外部存储，数据全在 App 私有目录
 android.permissions =
 
-# 目标与最低安卓版本：覆盖几乎所有在用机型（含 HarmonyOS 的安卓兼容模式）
-android.api = 35
+# 目标与最低安卓版本：API 34 稳定主流（API 35 太新，云端 SDK 常缺该平台导致编译失败）
+android.api = 34
 android.minapi = 21
 
 # 只打 arm64-v8a：Mate 80 等现代机型都是 64 位，包更小、编译更快
-android.arch = arm64-v8a
+# 新版 buildozer 用 android.archs（复数），旧写法 android.arch 会告警
+android.archs = arm64-v8a
 
 # 让 App  Private Storage 可写（默认即可，显式声明避免个别机型限制）
 android.private_storage = True
