@@ -25,17 +25,48 @@ jobs:
       # 镜像内已备齐 Python / Cython / JDK / Android SDK，首次需联网下载 SDK/NDK。
       # 关键：官方镜像把项目挂到 /home/user/hostcwd，工作目录也是它——不是 /src。
       # 入口脚本会读取该目录属主并切成该用户运行，所以不会触发 root 确认。
-      - name: 编译 APK（Kivy 官方镜像）
+      # 编译偶发会因网络抖动失败，故失败后自动重试一次；完整日志存文件便于排错。
+      - name: 编译 APK（Kivy 官方镜像，失败自动重试一次）
         working-directory: mobile
         run: |
           echo "开始编译，首次约 20 分钟，请耐心等待..."
           df -h . | tail -1
-          printf 'y\n' | docker run --rm -i -v "$PWD:/home/user/hostcwd" kivy/buildozer:latest android debug
+          set +e
+          ok=0
+          for attempt in 1 2; do
+            echo "===== 第 $attempt 次编译尝试 ====="
+            printf 'y\n' | docker run --rm -i -v "$PWD:/home/user/hostcwd" kivy/buildozer:latest android debug 2>&1 | tee "build_log_$attempt.txt"
+            rc=${PIPESTATUS[1]}
+            echo "本次编译退出码: $rc"
+            if [ "$rc" = "0" ]; then
+              ok=1
+              break
+            fi
+            if [ "$attempt" = "1" ]; then
+              echo "第一次失败，可能是网络抖动，5 秒后自动重试一次..."
+              sleep 5
+            fi
+          done
+          if [ "$ok" != "1" ]; then
+            echo "两次编译均失败。请到本任务底部 Artifacts 下载「编译日志」，把里面的 build_log_2.txt 发给开发者排错。"
+            exit 1
+          fi
+          echo "编译成功"
 
       # 容器内 root 生成的文件，改回当前用户可读
       - name: 修正产物权限
         if: always()
         run: sudo chown -R "$USER:$USER" mobile/bin mobile/.buildozer 2>/dev/null || true
+
+      # 无论成败都上传完整编译日志，失败时可直接下载发给开发者，无需截图
+      - name: 上传编译日志（排错用）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 编译日志
+          path: mobile/build_log_*.txt
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: 上传 APK
         uses: actions/upload-artifact@v4
