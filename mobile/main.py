@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import traceback
+import faulthandler
 
 # ---------------------------------------------------------------- 崩溃捕获
 # 真机闪退多为 Python 异常，静默崩回桌面看不到原因。
@@ -22,7 +23,8 @@ _CRASH_DIR = ""         # Android 分支填入可写目录
 _STAGE = "模块加载"      # 当前启动阶段，便于定位卡在哪一步
 
 def set_stage(s):
-    """记录启动进度到 stage.txt，即使原生层崩溃也能看出走到哪一步。"""
+    """记录启动进度：stage.txt 留最后一步，boot_trace.txt 留完整轨迹。
+    原生层崩溃时 Python 钩子够不到，靠这两个文件判断卡在哪一步。"""
     global _STAGE
     _STAGE = s
     try:
@@ -31,6 +33,12 @@ def set_stage(s):
             os.makedirs(d, exist_ok=True)
             with open(os.path.join(d, "stage.txt"), "w", encoding="utf-8") as f:
                 f.write(s)
+            with open(os.path.join(d, "boot_trace.txt"), "a", encoding="utf-8") as f:
+                f.write(s + "\n")
+    except Exception:
+        pass
+    try:
+        _update_status(s)
     except Exception:
         pass
 
@@ -57,37 +65,76 @@ def _record_crash(text):
     _show_crash_overlay(text)
 
 def _show_crash_overlay(text):
-    """把错误直接叠加到窗口最上层，不依赖 build() 是否成功。
-    on_enter / 按钮回调里的异常也能显示——这是上次缺失的一环。"""
+    """崩溃时弹出可截图的红字面板。
+    v16 教训：往 Window.add_widget 叠加在部分真机 Kivy 上根本不显示，
+    导致「有捕获但看不到提示页」。改用 Popup（Kivy 标准模态层）+
+    直接替换 root（v13 验证过能显示）双保险，并延迟到下一帧避开重入。"""
     try:
-        from kivy.core.window import Window
-        if getattr(Window, "_vocab_crash_shown", False):
+        from kivy.app import App
+        from kivy.clock import Clock
+        app0 = App.get_running_app()
+        if app0 is not None and getattr(app0, "_vocab_crash_shown", False):
             return
-        Window._vocab_crash_shown = True
-        from kivy.uix.boxlayout import BoxLayout as _BL
-        from kivy.uix.scrollview import ScrollView as _SV
-        from kivy.utils import get_color_from_hex as _g
-        from kivy.graphics import Color as _Color, Rectangle as _Rectangle
-        lay = _BL(orientation="vertical", padding=dp(12), spacing=dp(8))
-        with lay.canvas.before:
-            _Color(0, 0, 0, 1)
-            bg = _Rectangle(pos=lay.pos, size=lay.size)
-        def _sync(*_):
-            bg.pos = lay.pos
-            bg.size = lay.size
-        lay.bind(pos=_sync, size=_sync)
-        tip = _label(f"[{_STAGE}] 出错了，请截图发我：", 17, _g("#FF6B6B"))
-        tip.text_size = (max(200, Window.width - 24), None)
-        lay.add_widget(tip)
-        scroll = _SV()
-        detail = _label(text[:6000], 12, _g("#FFFFFF"))
-        detail.text_size = (max(200, Window.width - 24), None)
-        detail.bind(texture_size=detail.setter("size"))
-        scroll.add_widget(detail)
-        lay.add_widget(scroll)
-        Window.add_widget(lay)
+        if app0 is not None:
+            app0._vocab_crash_shown = True
+
+        def _do(_dt):
+            # 保险 1：Popup 模态弹窗，稳定盖在最上层
+            try:
+                from kivy.uix.popup import Popup
+                box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+                tip = _label(f"[{_STAGE}] 出错了，请截图发我：", 16,
+                             get_color_from_hex("#FF6B6B"))
+                tip.text_size = (dp(320), None)
+                box.add_widget(tip)
+                scroll = ScrollView()
+                detail = _label(text[:6000], 12, get_color_from_hex("#B91C1C"))
+                detail.text_size = (dp(320), None)
+                detail.bind(texture_size=detail.setter("size"))
+                scroll.add_widget(detail)
+                box.add_widget(scroll)
+                Popup(title="崩溃信息", content=box, size_hint=(0.94, 0.9)).open()
+                return
+            except Exception:
+                pass
+            # 保险 2：直接把当前 root 换成错误页（v13 验证过可显示）
+            try:
+                app = App.get_running_app()
+                root = app.root if app else None
+                if root is not None:
+                    root.clear_widgets()
+                    root.add_widget(error_screen(text))
+            except Exception:
+                pass
+
+        Clock.schedule_once(_do, 0)
     except Exception:
         pass
+
+_STATUS_LABEL = None
+
+def install_status_bar():
+    """屏幕顶端常驻一条阶段文字。原生崩溃来不及走 Python 钩子时，
+    用户截图这条就能看出卡在哪一步——这是反复闪退时最可靠的线索。"""
+    global _STATUS_LABEL
+    try:
+        from kivy.core.window import Window
+        from kivy.uix.label import Label as _L
+        bar = _L(text="启动中…", font_name=FONT, font_size=sp(11),
+                 color=get_color_from_hex("#DC2626"),
+                 size_hint=(1, None), height=dp(20), halign="left", valign="middle")
+        bar.text_size = (None, None)
+        _STATUS_LABEL = bar
+        Window.add_widget(bar)
+    except Exception:
+        pass
+
+def _update_status(s):
+    if _STATUS_LABEL is not None:
+        try:
+            _STATUS_LABEL.text = "阶段：" + s
+        except Exception:
+            pass
 
 def _excepthook(etype, exc, tb):
     text = "".join(traceback.format_exception(etype, exc, tb))
@@ -131,12 +178,36 @@ if _IS_ANDROID:
     os.environ["VOCAB_DATA_DIR"] = _DATA
     _CRASH_DIR = _DATA
 
+# ---------------------------------------------------------------- 原生崩溃捕获
+# 若崩溃发生在 C/C++ 层（OpenGL/字体渲染/ScreenManager FBO），Python 的
+# sys.excepthook 和 Kivy ExceptionManager 都接不到，App 直接静默闪退。
+# faulthandler 是唯一能记录这种崩溃的 Python 机制：把信号 + Python 栈写进文件。
+_FATAL_FH = None
+try:
+    _FH_DIR = _CRASH_DIR or os.environ.get("VOCAB_DATA_DIR", "") or os.path.expanduser("~")
+    os.makedirs(_FH_DIR, exist_ok=True)
+    _FATAL_FH = open(os.path.join(_FH_DIR, "fatal.txt"), "a", encoding="utf-8", buffering=1)
+    _FATAL_FH.write("\n\n===== 启动 =====\n")
+    faulthandler.enable(file=_FATAL_FH, all_threads=True)
+    # 也接 SIGBUS（兼容层内存映射异常常见）
+    import signal as _sig
+    if hasattr(_sig, "SIGBUS"):
+        try:
+            faulthandler.register(_sig.SIGBUS, file=_FATAL_FH, all_threads=True)
+        except Exception:
+            pass
+except Exception:
+    pass
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 if BASE not in sys.path:
     sys.path.insert(0, BASE)
 
 from kivy.app import App
-from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
+# 不用 FadeTransition：切换时要创建 FBO/纹理，部分安卓兼容层（如鸿蒙卓易通）
+# 图形栈支持不完整，会在切换动画时 native 崩溃——Python 异常钩子完全抓不到，
+# 表现就是「闪退且没有红字页」。改用默认 NoTransition，稳定且 on_enter 同步触发。
+from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
@@ -328,6 +399,7 @@ class UserScreen(Screen):
         self.add_widget(root)
 
     def on_enter(self):
+        set_stage("用户页:on_enter")
         self.refresh()
 
     def refresh(self):
@@ -729,18 +801,24 @@ class SettingsScreen(Screen):
 
     def show_crash(self, *_):
         app = App.get_running_app()
-        text = ""
+        parts = []
+        # 原生崩溃看 fatal.txt / boot_trace.txt / stage.txt；Python 异常看 crash.txt。
         for d in (getattr(app, "data_dir", ""), os.environ.get("VOCAB_DATA_DIR", "")):
             if not d:
                 continue
-            try:
-                p = os.path.join(d, "crash.txt")
-                if os.path.exists(p):
-                    with open(p, "r", encoding="utf-8") as f:
-                        text = f.read()
-                    break
-            except Exception:
-                pass
+            for name in ("fatal.txt", "crash.txt", "boot_trace.txt", "stage.txt"):
+                try:
+                    p = os.path.join(d, name)
+                    if os.path.exists(p):
+                        with open(p, "r", encoding="utf-8") as f:
+                            body = f.read().strip()
+                        if body:
+                            parts.append(f"----- {name} -----\n{body}")
+                except Exception:
+                    pass
+            if parts:
+                break
+        text = "\n\n".join(parts)
         if not text:
             text = "\n".join(_BOOT_ERR) or "没有发现崩溃日志（说明没有 Python 层报错）。"
         box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
@@ -767,7 +845,7 @@ class MainScreen(Screen):
         self.bar_user = _label("", 13, C_MUTED, halign="right")
         bar.add_widget(self.bar_user)
         root.add_widget(bar)
-        self.tabs = ScreenManager(transition=FadeTransition())
+        self.tabs = ScreenManager()  # NoTransition：避免兼容层 FBO 崩溃
         self.tabs.add_widget(DictScreen(name="dict"))
         self.tabs.add_widget(ImportScreen(name="import"))
         self.tabs.add_widget(StudyScreen(name="study"))
@@ -784,9 +862,12 @@ class MainScreen(Screen):
         self.add_widget(root)
 
     def on_enter(self):
+        set_stage("主界面:on_enter")
         app = App.get_running_app()
         self.bar_user.text = app.current_user
+        set_stage("主界面:切到背诵页前")
         self.go("study")
+        set_stage("主界面:切到背诵页后")
 
     def go(self, name):
         self.tabs.current = name
@@ -796,6 +877,11 @@ class VocabularyApp(App):
     def build(self):
         self.title = "词库本"
         _install_kivy_exception_handler()
+        # 阶段条延迟到首帧后挂上，避免和根控件一起布局时冲突
+        try:
+            Clock.schedule_once(lambda *_: install_status_bar(), 0.1)
+        except Exception:
+            pass
         try:
             set_stage("build:创建用户管理")
             self.users = UserManager()
@@ -804,7 +890,7 @@ class VocabularyApp(App):
             self.db = None
             self.data_dir = ""
             set_stage("build:创建界面")
-            sm = ScreenManager(transition=FadeTransition())
+            sm = ScreenManager()  # NoTransition：避免兼容层 FBO 崩溃
             sm.add_widget(UserScreen(name="users"))
             sm.add_widget(MainScreen(name="main"))
             self.sm = sm
