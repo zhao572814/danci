@@ -1,0 +1,37 @@
+# ===== 个人数据：绝不上传公开仓库 =====
+# 桌面端真实词库、用户注册信息、语音缓存、错误日志
+vocab_app/data/
+mobile/data/
+*.db
+*.db-wal
+*.db-shm
+users.json
+error.log
+
+# 调试截图
+preview_*.png
+
+# ===== 编译缓存与产物（GitHub 云端现编，不需上传） =====
+.buildozer/
+bin/
+dist/
+build/
+*.apk
+*.aab
+
+# ===== Python 缓存 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 内部工作记录，不上传 =====
+.workbuddy/

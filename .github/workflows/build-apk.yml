@@ -1,0 +1,49 @@
+name: 编译安卓 APK（词库本）
+
+# 每次推送代码后自动编译；也可以手动点 Run workflow 触发。
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      # 兜底中文字体：Android 一般都自带 Noto CJK，这里再备一份打进包里，
+      # 保证任何机型中文都不乱码。下载失败也不影响编译（|| true）。
+      - name: 准备中文字体（可选）
+        run: |
+          mkdir -p mobile/assets/fonts
+          curl -L --retry 2 --connect-timeout 15 \
+            -o mobile/assets/fonts/NotoSansSC.ttf \
+            "https://github.com/googlefonts/noto-cjk/raw/main/Sans/TTF/SimplifiedChinese/NotoSansSC-Regular.ttf" \
+            || echo "字体下载失败，将使用 Android 系统字体"
+          ls -lh mobile/assets/fonts/ || true
+
+      # 缓存 SDK/NDK 与 buildozer 依赖，第二次之后从约 20 分钟降到约 5 分钟
+      - name: 缓存 SDK / NDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            .buildozer
+            ~/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('mobile/buildozer.spec') }}
+
+      - name: 编译 APK
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          workdir: mobile
+          buildozer_version: stable
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 词库本-APK
+          path: ${{ steps.buildozer.outputs.filename }}
+          if-no-files-found: error
+          retention-days: 90
