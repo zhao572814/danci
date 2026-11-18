@@ -286,6 +286,25 @@ def _btn(text, bg=C_PRIMARY, color=(1, 1, 1, 1), size=16, height=48, on_press=No
     return b
 
 
+def dialog_box(orientation="vertical", **kw):
+    """弹窗内容容器：显式画浅色底。
+
+    Kivy 默认 Popup 内容是深灰底，配深色文字（C_TEXT）几乎看不见——
+    之前所有错误提示用户都看不到，就是这个原因。统一用浅底，深色字清晰可读。
+    """
+    opts = dict(orientation=orientation, padding=dp(16), spacing=dp(12))
+    opts.update(kw)
+    box = BoxLayout(**opts)
+    with box.canvas.before:
+        Color(*C_CARD)
+        rect = Rectangle(pos=box.pos, size=box.size)
+    def _sync(*_):
+        rect.pos = box.pos
+        rect.size = box.size
+    box.bind(pos=_sync, size=_sync)
+    return box
+
+
 class CardBox(BoxLayout):
     """带背景色的卡片容器。
 
@@ -323,14 +342,22 @@ def error_screen(text):
 
 
 def toast(title, message):
-    """轻量提示弹窗。"""
-    box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+    """轻量提示弹窗，高度随文字长短自适应，长错误信息也能看全。"""
+    box = dialog_box()
     lbl = _label(message, 15)
-    lbl.text_size = (dp(280), None)
+    # 用真实可用宽度折行，估算行数决定高度，避免长报错被截断
+    text_w = max(240, int(Window.width * 0.72))
+    lbl.text_size = (text_w, None)
     box.add_widget(lbl)
     ok = _btn("好的", on_press=lambda *_: None)
     box.add_widget(ok)
-    p = Popup(title=title, title_font=FONT, content=box, size_hint=(0.85, None), height=dp(190))
+    # 中文按每行约 text_w/15 个字粗估，最少 3 行，最多 14 行
+    per_line = max(12, int(text_w / 16))
+    lines = max(3, min(14, sum(max(1, (len(seg) // per_line) + 1)
+                               for seg in str(message).split("\n"))))
+    h = dp(70 + lines * 22)
+    p = Popup(title=title, title_font=FONT, content=box,
+              size_hint=(0.85, None), height=h)
     ok.bind(on_press=lambda *_: p.dismiss())
     p.open()
     return p
@@ -339,7 +366,7 @@ def toast(title, message):
 def flash(message, title="提示", dur=1.8):
     """自动消失的轻提示，不挡操作。朗读这类即时反馈用它可以避免「点了没反应」。"""
     try:
-        box = BoxLayout(orientation="vertical", padding=dp(14))
+        box = dialog_box(padding=dp(14))
         lbl = _label(message, 15)
         lbl.text_size = (dp(280), None)
         box.add_widget(lbl)
@@ -356,7 +383,7 @@ def flash(message, title="提示", dur=1.8):
 
 
 def confirm(title, message, on_yes):
-    box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+    box = dialog_box()
     lbl = _label(message, 15)
     lbl.text_size = (dp(280), None)
     box.add_widget(lbl)
@@ -412,21 +439,44 @@ def pick_document(on_text, title="选择文件"):
 # 才能知道引擎何时就绪。旧代码把 listener 传成 None，引擎可能永远不可用。
 _TTSInitListener = None
 try:
-    from jnius import PythonJavaClass as _PJC, javaapi as _javaapi  # type: ignore
+    from jnius import PythonJavaClass as _PJC  # type: ignore
+    # 新版 pyjnius 把 javaapi 改名为 java_method；两个名字都试，兼容所有版本。
+    # 之前只写 javaapi，在新版上直接 ImportError —— 这正是"朗读引擎不可用"的原因。
+    try:
+        from jnius import java_method as _javaapi  # type: ignore
+        _JAVA_DECORATOR_STYLE = "new"
+    except Exception:
+        from jnius import javaapi as _javaapi  # type: ignore
+        _JAVA_DECORATOR_STYLE = "old"
 
-    class _TTSInitListener(_PJC):
-        __javainterfaces__ = ["android.speech.tts.TextToSpeech$OnInitListener"]
+    if _JAVA_DECORATOR_STYLE == "new":
+        class _TTSInitListener(_PJC):
+            __javainterfaces__ = ["android.speech.tts.TextToSpeech$OnInitListener"]
 
-        def __init__(self, cb):
-            super().__init__()
-            self._cb = cb
+            def __init__(self, cb):
+                super().__init__()
+                self._cb = cb
 
-        @_javaapi("onInit", "(I)V")
-        def onInit(self, status):
-            try:
-                self._cb(status)
-            except Exception:
-                pass
+            @_javaapi("(I)V")
+            def onInit(self, status):
+                try:
+                    self._cb(status)
+                except Exception:
+                    pass
+    else:
+        class _TTSInitListener(_PJC):
+            __javainterfaces__ = ["android.speech.tts.TextToSpeech$OnInitListener"]
+
+            def __init__(self, cb):
+                super().__init__()
+                self._cb = cb
+
+            @_javaapi("onInit", "(I)V")
+            def onInit(self, status):
+                try:
+                    self._cb(status)
+                except Exception:
+                    pass
 except Exception:
     _TTSInitListener = None
 
@@ -480,7 +530,7 @@ class TTS:
             return
         self._state = "initing"
         if _TTSInitListener is None:
-            self._fail("朗读组件不可用（缺少 pyjnius）")
+            self._fail("朗读组件初始化失败（pyjnius 接口不匹配）。这台设备的系统朗读不可用，请用「看中文背诵」或「查看模式」照常背，不影响其它功能。")
             return
         try:
             from jnius import autoclass  # type: ignore
@@ -571,16 +621,39 @@ class TTS:
         return "朗读引擎：不可用 — " + (self._error or "未知原因")
 
     def open_settings(self):
-        """打开系统文字转语音设置，方便用户装语音包。返回是否成功。"""
+        """打开系统设置里与语音相关的页面。返回 (是否成功, 说明)。
+
+        卓易通/部分国产 ROM 没有 ACTION_TTS_SETTINGS，逐个尝试几个入口，
+        哪个能开开哪个；都不行返回明确原因，弹窗告诉用户手动路径。
+        """
+        from core.fileio import _get_android_activity
+        mActivity, act_err = _get_android_activity()
+        if mActivity is None:
+            return False, f"打不开系统设置（{act_err}）"
         try:
-            from android import mActivity  # type: ignore
             from jnius import autoclass  # type: ignore
             Intent = autoclass("android.content.Intent")
             Settings = autoclass("android.provider.Settings")
-            mActivity.startActivity(Intent(Settings.ACTION_TTS_SETTINGS))
-            return True
-        except Exception:
-            return False
+        except Exception as e:
+            return False, f"打不开系统设置（缺少 jnius：{e}）"
+
+        # 依次尝试：TTS 设置 → 无障碍/语言设置 → 系统设置首页
+        actions = []
+        for attr in ("ACTION_TTS_SETTINGS", "ACTION_ACCESSIBILITY_SETTINGS",
+                     "ACTION_SETTINGS"):
+            val = getattr(Settings, attr, None)
+            if val:
+                actions.append((attr, val))
+
+        tried = []
+        for name, action in actions:
+            try:
+                intent = Intent(action)
+                mActivity.startActivity(intent)
+                return True, name
+            except Exception as e:
+                tried.append(f"{name}:{type(e).__name__}")
+        return False, "这台设备的系统没有可用的语音设置入口（" + ", ".join(tried) + "）。请到「设置 → 应用/语言和输入法」里找文字转语音选项。"
 
 
 # ------------------------------------------------------------------ 页面
@@ -632,7 +705,7 @@ class UserScreen(Screen):
         confirm("删除用户", f"确定删除「{name}」？其数据库会先备份再删除。", do)
 
     def new_user(self, *_):
-        box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
+        box = dialog_box(spacing=dp(10))
         ti = TextInput(font_name=FONT, font_size=sp(16), multiline=False,
                        size_hint_y=None, height=dp(44), hint_text="输入用户名")
         box.add_widget(ti)
@@ -1045,7 +1118,7 @@ class SettingsScreen(Screen):
         """显示引擎状态；打不开英文语音时给一步到位的系统设置入口。"""
         app = App.get_running_app()
         status = app.tts.status_text()
-        box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+        box = dialog_box()
         lbl = _label(status, 14)
         lbl.text_size = (dp(300), None)
         box.add_widget(lbl)
@@ -1061,7 +1134,12 @@ class SettingsScreen(Screen):
         box.add_widget(row)
         p = Popup(title="朗读诊断", title_font=FONT, content=box,
                   size_hint=(0.9, None), height=dp(260))
-        go.bind(on_press=lambda *_: (app.tts.open_settings(), p.dismiss()))
+        def _open_settings(*_):
+            ok, msg = app.tts.open_settings()
+            p.dismiss()
+            if not ok:
+                toast("系统语音设置", msg)
+        go.bind(on_press=_open_settings)
         close.bind(on_press=lambda *_: p.dismiss())
         p.open()
 
@@ -1087,7 +1165,7 @@ class SettingsScreen(Screen):
         text = "\n\n".join(parts)
         if not text:
             text = "\n".join(_BOOT_ERR) or "没有发现崩溃日志（说明没有 Python 层报错）。"
-        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+        box = dialog_box(spacing=dp(8))
         scroll = ScrollView()
         detail = _label(text, 12, get_color_from_hex("#B91C1C"))
         detail.text_size = (dp(320), None)

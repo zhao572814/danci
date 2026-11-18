@@ -156,75 +156,152 @@ def extract_pdf_text(data: bytes) -> tuple[str, str]:
     return full, ""
 
 
+def _get_android_activity():
+    """取当前 Activity，多重兜底。
+
+    新版 p4a 里 `from android import mActivity` 由编译期的 _android 模块提供，
+    某些构建/兼容层下不可用；这里优先它，失败再直接问 Java 类要。
+    """
+    errors = []
+    # 路径 1：p4a 标准导出
+    try:
+        from android import mActivity  # type: ignore
+        if mActivity:
+            return mActivity, ""
+    except Exception as e:
+        errors.append(f"android.mActivity: {e}")
+    # 路径 2：新版 android.activity 模块内部的 _activity
+    try:
+        import android.activity as _am  # type: ignore
+        act = getattr(_am, "_activity", None) or getattr(_am, "mActivity", None)
+        if act:
+            return act, ""
+    except Exception as e:
+        errors.append(f"android.activity: {e}")
+    # 路径 3：直接从 Java 类取静态字段（Activity 类一定在 APK 里）
+    try:
+        from jnius import autoclass  # type: ignore
+        classes = ["org.kivy.android.PythonActivity",
+                   "org.kivy.android.PythonService"]
+        # 尽量从 android.config 读实际类名（不同 bootstrap 会改）
+        try:
+            from android.config import ACTIVITY_CLASS_NAME  # type: ignore
+            if ACTIVITY_CLASS_NAME and ACTIVITY_CLASS_NAME not in classes:
+                classes.insert(0, ACTIVITY_CLASS_NAME)
+        except Exception:
+            pass
+        for cls in classes:
+            try:
+                act = autoclass(cls).mActivity
+                if act:
+                    return act, ""
+            except Exception as e2:
+                errors.append(f"{cls}: {e2}")
+    except Exception as e:
+        errors.append(f"autoclass: {e}")
+    return None, "; ".join(errors)
+
+
+def _read_uri_bytes(resolver, uri):
+    """用 ContentResolver 读 content:// URI 的原始字节，不依赖 jarray。"""
+    from jnius import autoclass  # type: ignore
+    ByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
+    # 新版 pyjnius 推荐用 autoclass('[B') 建 byte[]，取代易出问题的 jarray('b')
+    try:
+        ByteArr = autoclass("[B")
+        buf = ByteArr(16384)
+    except Exception:
+        from jnius import jarray  # type: ignore  # 旧版兜底
+        buf = jarray("b")(16384)
+    stream = resolver.openInputStream(uri)
+    if stream is None:
+        return None, "无法打开这个文件，请换一个试试"
+    baos = ByteArrayOutputStream()
+    try:
+        while True:
+            count = stream.read(buf)
+            if count is None or count <= 0:
+                break
+            baos.write(buf, 0, count)
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+    raw = baos.toByteArray()
+    return bytes((int(x) & 0xFF) for x in raw), ""
+
+
+def _uri_display_name(resolver, uri):
+    """从 URI 取文件名，取不到就用路径尾段。"""
+    name = ""
+    try:
+        OpenableColumns = __import__("jnius").autoclass(  # type: ignore
+            "android.provider.OpenableColumns")
+        cursor = resolver.query(uri, None, None, None, None)
+        if cursor is not None:
+            idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if idx >= 0 and cursor.moveToFirst():
+                name = cursor.getString(idx) or ""
+            cursor.close()
+    except Exception:
+        pass
+    if not name:
+        try:
+            name = os.path.basename(uri.getPath() or "") or "file"
+        except Exception:
+            name = "file"
+    return name
+
+
 def pick_file(callback, mime: str = "*/*") -> None:
     """调起系统文件选择器，读取原始字节后回调。
 
     callback(name: str, data: bytes, err: str)
     用户取消时 name/data/err 都为空，不提示。
+    v20：所有 jnius 桥接点都做兼容兜底（java_method / autoclass('[B')），
+    不再因单个 API 改名导致整个文件导入功能失效。
     """
     try:
-        import android.activity  # type: ignore
-        from android import mActivity  # type: ignore
-        from jnius import autoclass, jarray  # type: ignore
+        from jnius import autoclass  # type: ignore
     except Exception as e:
-        callback("", b"", f"当前环境不支持文件选择：{e}。请用复制粘贴。")
+        callback("", b"", f"当前环境不支持文件选择（缺少 jnius：{e}）。请用复制粘贴。")
+        return
+    mActivity, act_err = _get_android_activity()
+    if mActivity is None:
+        callback("", b"", f"当前环境不支持文件选择（拿不到 Activity：{act_err}）。请用复制粘贴。")
         return
 
     Intent = autoclass("android.content.Intent")
     Activity = autoclass("android.app.Activity")
-    OpenableColumns = autoclass("android.provider.OpenableColumns")
-    ByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
     REQ = 42117
+    activity_mod = None
+    try:
+        import android.activity as activity_mod  # type: ignore
+    except Exception:
+        activity_mod = None
+
+    state = {"fired": False}
 
     def _on_result(requestCode, resultCode, data):
-        if requestCode != REQ:
+        if requestCode != REQ or state["fired"]:
             return
-        try:
-            android.activity.unbind(on_activity_result=_on_result)
-        except Exception:
-            pass
+        state["fired"] = True
+        if activity_mod is not None:
+            try:
+                activity_mod.unbind(on_activity_result=_on_result)
+            except Exception:
+                pass
         if resultCode != Activity.RESULT_OK or data is None:
             return  # 取消，静默
         try:
             uri = data.getData()
             resolver = mActivity.getContentResolver()
-
-            name = ""
-            try:
-                cursor = resolver.query(uri, None, None, None, None)
-                if cursor is not None:
-                    idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if idx >= 0 and cursor.moveToFirst():
-                        name = cursor.getString(idx) or ""
-                    cursor.close()
-            except Exception:
-                pass
-            if not name:
-                try:
-                    path = uri.getPath() or ""
-                    name = os.path.basename(path) or "file"
-                except Exception:
-                    name = "file"
-
-            stream = resolver.openInputStream(uri)
-            if stream is None:
-                callback(name, b"", "无法打开这个文件，请换一个试试")
+            name = _uri_display_name(resolver, uri)
+            payload, err = _read_uri_bytes(resolver, uri)
+            if err:
+                callback(name, b"", err)
                 return
-            baos = ByteArrayOutputStream()
-            buf = jarray("b")(16384)
-            try:
-                while True:
-                    count = stream.read(buf)
-                    if count is None or count <= 0:
-                        break
-                    baos.write(buf, 0, count)
-            finally:
-                try:
-                    stream.close()
-                except Exception:
-                    pass
-            raw = baos.toByteArray()
-            payload = bytes((int(x) & 0xFF) for x in raw)
             if not payload:
                 callback(name, b"", "这个文件是空的")
                 return
@@ -232,25 +309,66 @@ def pick_file(callback, mime: str = "*/*") -> None:
         except Exception as e:
             callback("", b"", f"读取文件失败：{type(e).__name__}: {e}")
 
-    def _start(intent_cls_action):
-        intent = Intent(intent_cls_action)
-        intent.setType(mime)
-        intent.addCategory(Intent.CATEGORY_OPENABLE)
+    def _start():
+        inner = Intent(Intent.ACTION_GET_CONTENT)  # 兼容层上比 OPEN_DOCUMENT 支持更广
+        inner.setType(mime)
+        inner.addCategory(Intent.CATEGORY_OPENABLE)
         try:
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            inner.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         except Exception:
             pass
-        mActivity.startActivityForResult(intent, REQ)
+        # 用 createChooser 让用户选文件应用，避免"没有应用响应"直接失败
+        try:
+            chooser = Intent.createChooser(inner, "选择文件")
+            mActivity.startActivityForResult(chooser, REQ)
+        except Exception:
+            mActivity.startActivityForResult(inner, REQ)
 
     try:
-        android.activity.bind(on_activity_result=_on_result)
-        try:
-            _start(Intent.ACTION_OPEN_DOCUMENT)   # Android 标准文档选择器
-        except Exception:
-            _start(Intent.ACTION_GET_CONTENT)     # 个别兼容层只支持 GET_CONTENT
+        if activity_mod is not None:
+            activity_mod.bind(on_activity_result=_on_result)
+        else:
+            # 没有 android.activity.bind 时，注册原生 listener 兜底
+            _bind_native_result(mActivity, _on_result)
+        _start()
     except Exception as e:
+        callback("", b"", f"打不开文件选择器：{type(e).__name__}: {e}。请用复制粘贴。")
+
+
+def _bind_native_result(activity, callback):
+    """当 android.activity 模块不可用时的原生 ActivityResult 监听兜底。"""
+    from jnius import PythonJavaClass, autoclass  # type: ignore
+    try:
+        from jnius import java_method as _jm  # type: ignore
+    except Exception:
+        from jnius import javaapi as _jm  # type: ignore
+
+    # PythonActivity 暴露了 registerActivityResultListener，监听器接口来自它自己
+    ifaces = []
+    for ns in ("org.kivy.android.PythonActivity", "org.kivy.android.PythonActivity$"):
+        ifaces.append(ns.rstrip("$") + "$ActivityResultListener")
+
+    last_err = None
+    for iface in ifaces:
         try:
-            android.activity.unbind(on_activity_result=_on_result)
-        except Exception:
-            pass
-        callback("", b"", f"打不开文件选择器：{e}。请用复制粘贴。")
+            class _ResultListener(PythonJavaClass):
+                __javainterfaces__ = [iface]
+                __javacontext__ = "app"
+
+                def __init__(self, cb):
+                    super().__init__()
+                    self.cb = cb
+
+                @_jm("(IILandroid/content/Intent;)V")
+                def onActivityResult(self, requestCode, resultCode, data):
+                    try:
+                        self.cb(requestCode, resultCode, data)
+                    except Exception:
+                        pass
+
+            listener = _ResultListener(callback)
+            activity.registerActivityResultListener(listener)
+            return listener
+        except Exception as e:
+            last_err = e
+    raise last_err if last_err else Exception("无法注册 ActivityResult 监听")
