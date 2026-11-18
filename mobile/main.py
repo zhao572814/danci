@@ -228,6 +228,7 @@ from core.db import VocabDB, parse_entry_lines
 from core.matcher import detect_items, annotate
 from core.users import UserManager
 from core.models import SCOPE_INBOX, SCOPE_MASTERED
+from core.fileio import pick_file, classify, decode_text, extract_pdf_text
 
 # ---------------------------------------------------------------- 中文字体
 # 优先用打进 APK 的 simhei.ttf（各机型一致，已验证中文正常），系统字体兜底。
@@ -372,131 +373,214 @@ def confirm(title, message, on_yes):
     return p
 
 
-def _read_text_path(path):
-    """把文件选择器给出的路径读成文本。
-    plyer 在安卓上可能只回传文件名而非完整路径（尤其从「下载」选的），
-    所以先直读，失败再依次到常见目录按文件名找。返回 (文本, 错误)。"""
-    if not path or not isinstance(path, str):
-        return "", "没有拿到有效文件路径"
-    candidates = [path]
-    base = os.path.basename(path)
-    for d in ("/storage/emulated/0/Download", "/sdcard/Download",
-              "/storage/emulated/0/Documents", os.path.expanduser("~")):
-        candidates.append(os.path.join(d, base))
-    tried = []
-    for c in candidates:
-        try:
-            with open(c, "r", encoding="utf-8-sig", errors="replace") as f:
-                return f.read(), ""
-        except Exception as e:
-            tried.append(f"{c}: {type(e).__name__}")
-    return "", "读不到文件（" + "; ".join(tried[:2]) + "）。若是从微信/网盘打开，请先把文件存到「下载」目录再选，或用复制粘贴。"
+def pick_document(on_text, title="选择文件"):
+    """弹出系统文件选择器，把选中的文件解析成纯文本后回调 on_text(text, kind, name)。
 
-
-def pick_text_file(on_text):
-    """弹出系统文件选择器，选中的 TXT 读成文本后回调 on_text(text)。"""
-    try:
-        from plyer import filechooser  # type: ignore
-    except Exception as e:
-        toast("文件导入", f"当前环境不支持文件选择：{e}。请用复制粘贴。")
-        return
-    def _selected(selection):
-        try:
-            path = None
-            if isinstance(selection, (list, tuple)) and selection:
-                path = selection[0]
-            elif isinstance(selection, str):
-                path = selection
-            text, err = _read_text_path(path)
-            if err:
-                toast("文件导入", err)
+    支持 TXT / PDF（内嵌文字）/ 图片（无 OCR 时给出替代提示）。
+    v18 修复：不再用 plyer 那条会把 content:// 退化成文件名的老路，
+    改用 core.fileio 直接读原始 URI 字节流。
+    """
+    def _done(name, data, err):
+        if err:
+            toast(title, err)
+            return
+        if not data:
+            return  # 用户取消
+        kind = classify(name)
+        if kind == "pdf":
+            text, notice = extract_pdf_text(data)
+            if notice:
+                toast("PDF 识别", notice)
                 return
+            on_text(text, kind, name)
+        elif kind == "text":
+            text = decode_text(data)
             if not text.strip():
-                toast("文件导入", "这个文件内容是空的")
+                toast("文件导入", "这个文件是空的")
                 return
-            on_text(text)
-        except Exception as e:
-            toast("文件导入", f"读取文件出错：{e}")
-    try:
-        filechooser.open_file(title="选择 TXT 文件", filters=["*.txt", "*.TXT"],
-                              on_selection=_selected)
-    except Exception as e:
-        # 某些机型 filters 参数不兼容，退化为不过滤再试一次
-        try:
-            filechooser.open_file(on_selection=_selected)
-        except Exception as e2:
-            toast("文件导入", f"打不开文件选择器：{e2}。请用复制粘贴。")
+            on_text(text, kind, name)
+        elif kind == "image":
+            # 纯离线 APK 无可靠 OCR 引擎（卓易通无 GMS），诚实降级
+            toast("图片识别", "纯离线版暂不支持直接识别图片文字。请用手机相册或微信的「提取文字 / 扫一扫」把图中英文复制出来，回到这里粘贴后点「识别文本」。")
+        else:
+            toast("文件导入", f"暂不支持这个格式：{name}。请用 TXT / PDF / 图片。")
+
+    pick_file(_done, mime="*/*")
+
+
+# 朗读初始化监听器：TextToSpeech 的 onInit 是异步回调，必须实现 Java 接口
+# 才能知道引擎何时就绪。旧代码把 listener 传成 None，引擎可能永远不可用。
+_TTSInitListener = None
+try:
+    from jnius import PythonJavaClass as _PJC, javaapi as _javaapi  # type: ignore
+
+    class _TTSInitListener(_PJC):
+        __javainterfaces__ = ["android.speech.tts.TextToSpeech$OnInitListener"]
+
+        def __init__(self, cb):
+            super().__init__()
+            self._cb = cb
+
+        @_javaapi("onInit", "(I)V")
+        def onInit(self, status):
+            try:
+                self._cb(status)
+            except Exception:
+                pass
+except Exception:
+    _TTSInitListener = None
 
 
 class TTS:
-    """安卓系统朗读（直接用系统 TextToSpeech）。
+    """安卓系统朗读（系统 TextToSpeech）。
 
-    不用 plyer.tts：它的安卓实现会在引擎未就绪时空转 100 次 ×0.1 秒（卡 UI 10 秒），
-    且失败后一声不响——表现就是「点了朗读啥也没有」。这里：
-    · 单例复用引擎，只初始化一次；
-    · setLanguage 前先看引擎是否就绪，就绪了再朗读；
-    · 用短重试（最多 ~1 秒）不卡界面；
-    · 明确返回成功/失败原因，界面弹提示。
+    v18 重写要点：
+    · 用 OnInitListener 等引擎真正就绪，不再传 None；
+    · setLanguage(en) 并检查 isLanguageAvailable，中文/缺语音包时给明确原因；
+    · 用带 utteranceId 的 4 参数 speak；
+    · 引擎初始化前点的朗读先排队，就绪后自动补发，不吞掉用户操作；
+    · 任何失败都有具体原因文本，界面弹一条（不再成功/失败两条弹窗叠加）。
     """
+
+    SUCCESS = 0
+    LANG_OK = (0, 1, 2)  # LANG_AVAILABLE / LANG_COUNTRY_AVAILABLE / LANG_LANGUAGE_AVAILABLE
 
     def __init__(self):
         self._engine = None
         self._TTSS = None
         self._Locale = None
-        self._tried = False
-        self._last_error = ""
+        self._Bundle = None
+        self._listener = None          # 必须持有引用，防止被 GC 后回调丢失
+        self._state = "new"            # new / initing / ready / fail
+        self._error = ""
+        self._queue = []               # [(word, on_fail), ...]
+        self._init_status = None       # 缓存 onInit 结果（防同步回调早于 engine 赋值）
+
+    def _notify(self, on_fail, msg):
+        """把失败回调切回 Kivy 主线程再弹窗（onInit 可能非主线程）。"""
+        if not on_fail:
+            return
+        try:
+            Clock.schedule_once(lambda *_: on_fail(msg), 0)
+        except Exception:
+            try:
+                on_fail(msg)
+            except Exception:
+                pass
+
+    def _fail(self, msg):
+        self._state = "fail"
+        self._error = msg
+        queue, self._queue = self._queue, []
+        for _, on_fail in queue:
+            self._notify(on_fail, msg)
 
     def _init(self):
-        if self._tried:
+        if self._state != "new":
             return
-        self._tried = True
+        self._state = "initing"
+        if _TTSInitListener is None:
+            self._fail("朗读组件不可用（缺少 pyjnius）")
+            return
         try:
             from jnius import autoclass  # type: ignore
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
             Locale = autoclass("java.util.Locale")
+            Bundle = autoclass("android.os.Bundle")
             activity = PythonActivity.mActivity
             if not activity:
-                self._last_error = "拿不到安卓 Activity，无法朗读"
+                self._fail("拿不到安卓 Activity，无法朗读")
                 return
-            self._engine = TextToSpeech(activity, None)
             self._TTSS = TextToSpeech
             self._Locale = Locale
+            self._Bundle = Bundle
+            self._listener = _TTSInitListener(self._on_init)
+            self._engine = TextToSpeech(activity, self._listener)
+            # 个别机型 onInit 同步回调，那时 engine 还没赋值；这里补处理缓存的状态
+            if self._init_status is not None and self._state in ("initing", "ready", "fail"):
+                st, self._init_status = self._init_status, None
+                self._on_init(st)
         except Exception as e:
-            self._last_error = f"系统朗读引擎不可用：{e}"
+            self._fail(f"系统朗读引擎不可用：{type(e).__name__}: {e}")
+
+    def _on_init(self, status):
+        if self._engine is None:
+            # 同步回调早于构造函数返回：先缓存，等 _init 里补处理
+            self._init_status = status
+            return
+        if status != self.SUCCESS:
+            self._fail(f"朗读引擎启动失败（代码 {status}）。请到手机「设置 → 语言和输入法 → 文字转语音」检查默认引擎。")
+            return
+        try:
+            loc = self._Locale.US
+            avail = self._engine.isLanguageAvailable(loc)
+            if avail not in self.LANG_OK:
+                loc = self._Locale.ENGLISH
+                avail = self._engine.isLanguageAvailable(loc)
+            if avail not in self.LANG_OK:
+                self._fail("设备缺少英文语音包。请到「设置 → 语言和输入法 → 文字转语音」安装英语语音数据，或换用「看中文背诵」模式。")
+                return
+            set_result = self._engine.setLanguage(loc)
+            if set_result not in self.LANG_OK:
+                self._fail(f"切换英文发音失败（代码 {set_result}），设备可能没装英文语音包。")
+                return
+        except Exception as e:
+            self._fail(f"设置英文发音出错：{type(e).__name__}: {e}")
+            return
+        self._state = "ready"
+        self._error = ""
+        queue, self._queue = self._queue, []
+        for word, on_fail in queue:
+            self._do_speak(word, on_fail)
 
     def speak(self, word: str, on_fail=None):
-        """发起朗读，立即返回不阻塞界面。引擎没就绪时用 Clock 短重试，
-        最终失败通过 on_fail(msg) 回调弹提示（避免「点了没反应」）。"""
+        """发起朗读，立即返回不阻塞界面。返回 (是否已受理, 说明)。"""
         self._init()
-        if self._engine is None:
-            msg = self._last_error or "这台设备没有可用的朗读引擎"
-            if on_fail:
-                on_fail(msg)
-            return False, msg
-        state = {"tries": 0}
-        Q = self._TTSS.QUEUE_FLUSH
-
-        def attempt(_dt=0):
-            try:
-                status = self._engine.speak(str(word), Q, None)
-            except Exception as e:
-                if on_fail:
-                    on_fail(f"朗读失败：{e}")
-                return
-            if status == 0:  # TextToSpeech.SUCCESS
-                return
-            state["tries"] += 1
-            if state["tries"] < 6:
-                try:
-                    Clock.schedule_once(attempt, 0.25)
-                except Exception:
-                    pass
-            elif on_fail:
-                on_fail("朗读引擎还没准备好，请稍后再点一次；或到手机设置里确认已安装语音引擎")
-
-        attempt()
+        if self._state == "ready":
+            return self._do_speak(word, on_fail)
+        if self._state == "fail":
+            self._notify(on_fail, self._error)
+            return False, self._error
+        # 初始化中：排队，就绪后自动补发
+        self._queue.append((word, on_fail))
         return True, ""
+
+    def _do_speak(self, word, on_fail=None):
+        try:
+            params = self._Bundle()
+            uid = "vocab_" + str(abs(hash(str(word))) % 1000000)
+            status = self._engine.speak(str(word), self._TTSS.QUEUE_FLUSH, params, uid)
+            if status != self.SUCCESS:
+                msg = f"朗读引擎拒绝播放（代码 {status}）"
+                self._notify(on_fail, msg)
+                return False, msg
+            return True, ""
+        except Exception as e:
+            msg = f"朗读失败：{type(e).__name__}: {e}"
+            self._notify(on_fail, msg)
+            return False, msg
+
+    def status_text(self):
+        """给设置页显示的诊断文本。"""
+        self._init()
+        if self._state == "ready":
+            return "朗读引擎：就绪（英文语音已启用）"
+        if self._state == "initing":
+            return "朗读引擎：初始化中…稍等再点朗读"
+        return "朗读引擎：不可用 — " + (self._error or "未知原因")
+
+    def open_settings(self):
+        """打开系统文字转语音设置，方便用户装语音包。返回是否成功。"""
+        try:
+            from android import mActivity  # type: ignore
+            from jnius import autoclass  # type: ignore
+            Intent = autoclass("android.content.Intent")
+            Settings = autoclass("android.provider.Settings")
+            mActivity.startActivity(Intent(Settings.ACTION_TTS_SETTINGS))
+            return True
+        except Exception:
+            return False
 
 
 # ------------------------------------------------------------------ 页面
@@ -614,15 +698,15 @@ class DictScreen(Screen):
         toast("导入完成", msg)
 
     def import_file(self, *_):
-        def _got(text):
+        def _got(text, kind, name):
             items = parse_entry_lines(text)
             if not items:
-                toast("文件导入", "没从这个 TXT 里解析出词条，请确认每行是「单词 释义」格式")
+                toast("文件导入", "没从这个文件里解析出词条，请确认每行是「单词 释义」格式")
                 return
             n, msg = App.get_running_app().db.import_entries(items, source="txt_file")
             self.refresh()
             toast("导入完成", msg)
-        pick_text_file(_got)
+        pick_document(_got, title="选择词库 TXT")
 
     def install_builtin(self, *_):
         def do():
@@ -643,14 +727,14 @@ class ImportScreen(Screen):
     def __init__(self, **kw):
         super().__init__(**kw)
         root = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(14))
-        root.add_widget(_label("粘贴要背的英文文本 / 文章", 16))
+        root.add_widget(_label("要背的单词 / 文章：导入文件或粘贴文本", 16))
         self.text = TextInput(font_name=FONT, font_size=sp(15), multiline=True,
-                              hint_text="把英文段落粘贴到这里，或从 TXT 文件读入",
+                              hint_text="导入 TXT / PDF，或把英文段落粘贴到这里，再点「识别文本」",
                               size_hint=(1, 0.3), background_color=C_CARD,
                               foreground_color=C_TEXT)
         root.add_widget(self.text)
         opt = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(44))
-        opt.add_widget(_btn("导入TXT文件", bg=C_LINE, color=C_TEXT, size=14,
+        opt.add_widget(_btn("导入文件", bg=C_LINE, color=C_TEXT, size=14,
                             on_press=self.import_file))
         self.chk_stop = Button(text="过滤虚词：关", font_name=FONT, font_size=sp(12),
                                background_color=C_LINE, color=C_TEXT,
@@ -676,10 +760,11 @@ class ImportScreen(Screen):
         self.chk_stop.text = f"过滤虚词：{'开' if self.filter_stop else '关'}"
 
     def import_file(self, *_):
-        def _got(text):
+        def _got(text, kind, name):
             self.text.text = text
-            toast("文件读入", f"已读入 {len(text)} 个字符，点「识别文本」继续")
-        pick_text_file(_got)
+            tip = "TXT" if kind == "text" else "PDF"
+            toast("文件读入", f"已从 {name}（{tip}）读入 {len(text)} 个字符，点「识别文本」继续")
+        pick_document(_got, title="选择要识别的文件")
 
     def recognize(self, *_):
         app = App.get_running_app()
@@ -841,11 +926,12 @@ class StudyScreen(Screen):
             return
         word = self.current.get("word", "")
         if not word:
-            flash("这个词没有读音内容", "朗读")
+            toast("朗读", "这个词没有可朗读的内容")
             return
-        flash("正在朗读：" + word, "朗读", dur=1.2)
+        # 不预弹「正在朗读」：它和失败提示会叠成两个弹窗，把原因遮住。
+        # 成功时直接出声；失败时由 on_fail 弹一条带具体原因的提示。
         App.get_running_app().tts.speak(
-            word, on_fail=lambda m: flash(m, "朗读未成功"))
+            word, on_fail=lambda m: toast("朗读未成功", m))
 
     def check(self, *_):
         if not self.current:
@@ -935,6 +1021,8 @@ class SettingsScreen(Screen):
         root.add_widget(self.path_lbl)
         root.add_widget(_btn("切换 / 管理用户", on_press=self.switch_user))
         root.add_widget(_btn("测试朗读（apple）", bg=C_OK, on_press=self.test_tts))
+        root.add_widget(_btn("朗读诊断 / 打开语音设置", bg=C_LINE, color=C_TEXT,
+                             on_press=self.tts_diag))
         root.add_widget(_btn("查看崩溃日志（排查闪退用）", bg=C_LINE, color=C_TEXT,
                              on_press=self.show_crash))
         root.add_widget(_label("词库本 · 手机版 1.0\n纯离线 · 数据只保存在本机", 13,
@@ -950,9 +1038,32 @@ class SettingsScreen(Screen):
         App.get_running_app().stop_user_and_show_users()
 
     def test_tts(self, *_):
-        flash("正在朗读：apple", "朗读测试", dur=1.2)
         App.get_running_app().tts.speak(
-            "apple", on_fail=lambda m: flash(m, "朗读未成功"))
+            "apple", on_fail=lambda m: toast("朗读未成功", m))
+
+    def tts_diag(self, *_):
+        """显示引擎状态；打不开英文语音时给一步到位的系统设置入口。"""
+        app = App.get_running_app()
+        status = app.tts.status_text()
+        box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+        lbl = _label(status, 14)
+        lbl.text_size = (dp(300), None)
+        box.add_widget(lbl)
+        tip = _label("若提示缺少英文语音包，点下方按钮到系统设置里安装「英语（美国）」语音数据后，回来重试。",
+                     12, C_MUTED)
+        tip.text_size = (dp(300), None)
+        box.add_widget(tip)
+        row = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(46))
+        go = _btn("打开系统语音设置", bg=C_OK, size=13)
+        close = _btn("关闭", bg=C_LINE, color=C_TEXT, size=13)
+        row.add_widget(go)
+        row.add_widget(close)
+        box.add_widget(row)
+        p = Popup(title="朗读诊断", title_font=FONT, content=box,
+                  size_hint=(0.9, None), height=dp(260))
+        go.bind(on_press=lambda *_: (app.tts.open_settings(), p.dismiss()))
+        close.bind(on_press=lambda *_: p.dismiss())
+        p.open()
 
     def show_crash(self, *_):
         app = App.get_running_app()
