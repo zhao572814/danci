@@ -16,6 +16,24 @@ from __future__ import annotations
 import os
 import re
 
+# 必须持有原生 listener 的 Python 引用，否则函数返回后被 GC 回收，
+# Java 层的回调对象随之失效 —— 这是"有选择流程但结果永不回调"的隐蔽真凶。
+_KEEPALIVE = []
+
+
+def _debug(line):
+    """把文件选择的每一步写入 fileio_debug.txt（数据目录），便于真机排查。
+    用户可在「设置 → 查看崩溃日志」里看到，不用再靠猜。"""
+    try:
+        import time
+        d = os.environ.get("VOCAB_DATA_DIR", "") or os.path.expanduser("~")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "fileio_debug.txt"), "a", encoding="utf-8") as f:
+            f.write(time.strftime("%H:%M:%S ") + str(line) + "\n")
+    except Exception:
+        pass
+
+
 TEXT_EXT = {".txt", ".md", ".csv", ".log", ".json", ".srt", ".text"}
 PDF_EXT = {".pdf"}
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
@@ -255,50 +273,66 @@ def _uri_display_name(resolver, uri):
 
 
 def pick_file(callback, mime: str = "*/*") -> None:
-    """调起系统文件选择器，读取原始字节后回调。
+    """调起系统文件选择器，读取原始字节后回调 callback(name, data, err)。
 
-    callback(name: str, data: bytes, err: str)
-    用户取消时 name/data/err 都为空，不提示。
-    v20：所有 jnius 桥接点都做兼容兜底（java_method / autoclass('[B')），
-    不再因单个 API 改名导致整个文件导入功能失效。
+    v21 关键修复（"选了文件却没反应"）：
+    * 旧代码用 `if requestCode != REQ: return` 严格匹配，鸿蒙卓易通用
+      createChooser 后回传的 requestCode 可能对不上，结果被静默丢弃 ——
+      这正好解释"有选择流程、但导入没效果、连错误提示都没有"。现在只要
+      拿到结果（resultCode OK 且 data 非空）就处理，不纠结 requestCode。
+    * 回调双通道注册：官方 android.activity.bind + 原生 listener 都上，
+      任一触发即可，用 fired 去重。单一通道在某些兼容层会失效。
+    * 每一步写 fileio_debug.txt，真机问题能直接看到卡在哪。
     """
+    _debug("=== pick_file 开始 mime=%s ===" % mime)
     try:
         from jnius import autoclass  # type: ignore
     except Exception as e:
+        _debug("缺少 jnius: %s" % e)
         callback("", b"", f"当前环境不支持文件选择（缺少 jnius：{e}）。请用复制粘贴。")
         return
     mActivity, act_err = _get_android_activity()
     if mActivity is None:
+        _debug("拿不到 Activity: %s" % act_err)
         callback("", b"", f"当前环境不支持文件选择（拿不到 Activity：{act_err}）。请用复制粘贴。")
         return
+    _debug("Activity 已获取: %s" % type(mActivity).__name__)
 
-    Intent = autoclass("android.content.Intent")
-    Activity = autoclass("android.app.Activity")
-    REQ = 42117
-    activity_mod = None
     try:
-        import android.activity as activity_mod  # type: ignore
-    except Exception:
-        activity_mod = None
-
+        Intent = autoclass("android.content.Intent")
+        Activity = autoclass("android.app.Activity")
+    except Exception as e:
+        _debug("autoclass Intent/Activity 失败: %s" % e)
+        callback("", b"", f"系统接口不可用：{e}。请用复制粘贴。")
+        return
+    REQ = 42117
     state = {"fired": False}
 
-    def _on_result(requestCode, resultCode, data):
-        if requestCode != REQ or state["fired"]:
+    def _handle_result(requestCode, resultCode, data):
+        """统一结果处理，两个注册通道都汇到这里。"""
+        _debug("收到结果 req=%s code=%s data=%s" %
+               (requestCode, resultCode, "有" if data is not None else "空"))
+        if state["fired"]:
+            _debug("结果重复，忽略")
+            return
+        # 放宽：不再要求 requestCode == REQ（兼容层可能改动它）。
+        # 一次只开一个选择器，只要 resultCode 是 OK 且有 data 就处理。
+        if resultCode != Activity.RESULT_OK or data is None:
+            _debug("判定为取消或失败，静默返回")
+            state["fired"] = True
             return
         state["fired"] = True
-        if activity_mod is not None:
-            try:
-                activity_mod.unbind(on_activity_result=_on_result)
-            except Exception:
-                pass
-        if resultCode != Activity.RESULT_OK or data is None:
-            return  # 取消，静默
         try:
             uri = data.getData()
+            _debug("URI=%s" % uri)
+            if uri is None:
+                callback("", b"", "系统没返回文件，请重新选一次")
+                return
             resolver = mActivity.getContentResolver()
             name = _uri_display_name(resolver, uri)
+            _debug("文件名=%s" % name)
             payload, err = _read_uri_bytes(resolver, uri)
+            _debug("读取字节数=%s err=%s" % (len(payload) if payload else 0, err))
             if err:
                 callback(name, b"", err)
                 return
@@ -306,7 +340,9 @@ def pick_file(callback, mime: str = "*/*") -> None:
                 callback(name, b"", "这个文件是空的")
                 return
             callback(name, payload, "")
+            _debug("已回调 on_text")
         except Exception as e:
+            _debug("处理结果异常: %s: %s" % (type(e).__name__, e))
             callback("", b"", f"读取文件失败：{type(e).__name__}: {e}")
 
     def _start():
@@ -317,21 +353,40 @@ def pick_file(callback, mime: str = "*/*") -> None:
             inner.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         except Exception:
             pass
-        # 用 createChooser 让用户选文件应用，避免"没有应用响应"直接失败
         try:
             chooser = Intent.createChooser(inner, "选择文件")
+            _debug("startActivityForResult(chooser)")
             mActivity.startActivityForResult(chooser, REQ)
-        except Exception:
+        except Exception as ce:
+            _debug("chooser 失败，改直启: %s" % ce)
             mActivity.startActivityForResult(inner, REQ)
 
+    # 通道 1：官方 android.activity.bind（内部就是 registerActivityResultListener）
+    bound = False
     try:
-        if activity_mod is not None:
-            activity_mod.bind(on_activity_result=_on_result)
-        else:
-            # 没有 android.activity.bind 时，注册原生 listener 兜底
-            _bind_native_result(mActivity, _on_result)
+        import android.activity as activity_mod  # type: ignore
+        activity_mod.bind(on_activity_result=_handle_result)
+        bound = True
+        _debug("通道1 android.activity.bind 注册成功")
+    except Exception as e:
+        _debug("通道1 bind 失败: %s" % e)
+
+    # 通道 2：直接注册原生 ActivityResultListener（兜底，双保险）
+    # 关键：把 listener 存入 _KEEPALIVE 持有强引用，防止被 GC 后回调失效。
+    try:
+        _native_listener = _bind_native_result(mActivity, _handle_result)
+        _KEEPALIVE.append(_native_listener)
+        _debug("通道2 native listener 注册成功（已持有引用）")
+    except Exception as e:
+        _debug("通道2 native 失败: %s" % e)
+
+    if not bound:
+        _debug("警告：两个通道都未注册成功")
+
+    try:
         _start()
     except Exception as e:
+        _debug("启动选择器异常: %s" % e)
         callback("", b"", f"打不开文件选择器：{type(e).__name__}: {e}。请用复制粘贴。")
 
 
@@ -343,10 +398,25 @@ def _bind_native_result(activity, callback):
     except Exception:
         from jnius import javaapi as _jm  # type: ignore
 
-    # PythonActivity 暴露了 registerActivityResultListener，监听器接口来自它自己
-    ifaces = []
-    for ns in ("org.kivy.android.PythonActivity", "org.kivy.android.PythonActivity$"):
-        ifaces.append(ns.rstrip("$") + "$ActivityResultListener")
+    # PythonActivity 暴露了 registerActivityResultListener，监听器接口来自它自己。
+    # p4a 官方源码用 ACTIVITY_CLASS_NAMESPACE + '$ActivityResultListener'，
+    # namespace 可能是点号或斜杠形式，两种都试（pyjnius 两者都接受）。
+    ifaces = [
+        "org.kivy.android.PythonActivity$ActivityResultListener",
+        "org/kivy/android/PythonActivity$ActivityResultListener",
+    ]
+    try:
+        from android.config import ACTIVITY_CLASS_NAMESPACE as _ns  # type: ignore
+        if _ns:
+            if not _ns.endswith("/") and not _ns.endswith("."):
+                # _ns 通常是类名（含 $ 或不含），补成 ActivityResultListener
+                base = _ns
+                for cand in (base + "$ActivityResultListener",
+                             base.replace(".", "/") + "$ActivityResultListener"):
+                    if cand not in ifaces:
+                        ifaces.insert(0, cand)
+    except Exception:
+        pass
 
     last_err = None
     for iface in ifaces:

@@ -637,10 +637,12 @@ class TTS:
         except Exception as e:
             return False, f"打不开系统设置（缺少 jnius：{e}）"
 
-        # 依次尝试：TTS 设置 → 无障碍/语言设置 → 系统设置首页
+        # 只尝试 TTS 设置和系统设置首页。
+        # 注意：不要用 ACTION_ACCESSIBILITY_SETTINGS —— 鸿蒙/国产 ROM 会把它
+        # 当成"申请无障碍权限"拦截，弹出"为保障隐私暂不支持获取无障碍权限"
+        # 的系统 toast，反而让用户以为 App 出问题（本轮真机截图就是它）。
         actions = []
-        for attr in ("ACTION_TTS_SETTINGS", "ACTION_ACCESSIBILITY_SETTINGS",
-                     "ACTION_SETTINGS"):
+        for attr in ("ACTION_TTS_SETTINGS", "ACTION_SETTINGS"):
             val = getattr(Settings, attr, None)
             if val:
                 actions.append((attr, val))
@@ -649,11 +651,22 @@ class TTS:
         for name, action in actions:
             try:
                 intent = Intent(action)
+                # 先预检有没有 Activity 能处理，避免 startActivity 抛异常
+                # 或触发系统拦截提示。
+                try:
+                    pm = mActivity.getPackageManager()
+                    resolved = intent.resolveActivity(pm)
+                    if resolved is None:
+                        tried.append(f"{name}:无应用响应")
+                        continue
+                except Exception:
+                    pass  # precheck 不支持就直接尝试
                 mActivity.startActivity(intent)
                 return True, name
             except Exception as e:
                 tried.append(f"{name}:{type(e).__name__}")
-        return False, "这台设备的系统没有可用的语音设置入口（" + ", ".join(tried) + "）。请到「设置 → 应用/语言和输入法」里找文字转语音选项。"
+        return False, ("这台设备没有可打开的语音设置页（" + ", ".join(tried) +
+                       "）。请手动到「设置 → 语言和输入法 → 文字转语音」安装英语语音数据。")
 
 
 # ------------------------------------------------------------------ 页面
@@ -1094,9 +1107,13 @@ class SettingsScreen(Screen):
         root.add_widget(self.path_lbl)
         root.add_widget(_btn("切换 / 管理用户", on_press=self.switch_user))
         root.add_widget(_btn("测试朗读（apple）", bg=C_OK, on_press=self.test_tts))
+        # 朗读状态常驻显示：不用点弹窗，也不怕被系统 toast 盖住
+        self.tts_status = _label("朗读引擎状态：检测中…", 13, C_TEXT)
+        self.tts_status.text_size = (dp(320), None)
+        root.add_widget(self.tts_status)
         root.add_widget(_btn("朗读诊断 / 打开语音设置", bg=C_LINE, color=C_TEXT,
                              on_press=self.tts_diag))
-        root.add_widget(_btn("查看崩溃日志（排查闪退用）", bg=C_LINE, color=C_TEXT,
+        root.add_widget(_btn("查看崩溃日志 / 导入记录（排查用）", bg=C_LINE, color=C_TEXT,
                              on_press=self.show_crash))
         root.add_widget(_label("词库本 · 手机版 1.0\n纯离线 · 数据只保存在本机", 13,
                                C_MUTED, halign="center"))
@@ -1106,13 +1123,24 @@ class SettingsScreen(Screen):
         app = App.get_running_app()
         self.user_lbl.text = f"当前用户：{app.current_user}"
         self.path_lbl.text = f"数据目录：{app.data_dir}"
+        try:
+            self.tts_status.text = app.tts.status_text()
+        except Exception:
+            self.tts_status.text = "朗读引擎状态：检测失败"
 
     def switch_user(self, *_):
         App.get_running_app().stop_user_and_show_users()
 
     def test_tts(self, *_):
-        App.get_running_app().tts.speak(
-            "apple", on_fail=lambda m: toast("朗读未成功", m))
+        app = App.get_running_app()
+        app.tts.speak("apple", on_fail=lambda m: (
+            self._refresh_tts_status(), toast("朗读未成功", m))[1])
+
+    def _refresh_tts_status(self):
+        try:
+            self.tts_status.text = App.get_running_app().tts.status_text()
+        except Exception:
+            pass
 
     def tts_diag(self, *_):
         """显示引擎状态；打不开英文语音时给一步到位的系统设置入口。"""
@@ -1146,25 +1174,32 @@ class SettingsScreen(Screen):
     def show_crash(self, *_):
         app = App.get_running_app()
         parts = []
+        # 朗读状态放最前，点进来第一眼就能看到（不受系统 toast 遮挡）
+        try:
+            parts.append("----- 朗读引擎状态 -----\n" + app.tts.status_text())
+        except Exception:
+            pass
+        # fileio_debug.txt：文件选择每一步的记录，定位"选了没反应"
         # 原生崩溃看 fatal.txt / boot_trace.txt / stage.txt；Python 异常看 crash.txt。
         for d in (getattr(app, "data_dir", ""), os.environ.get("VOCAB_DATA_DIR", "")):
             if not d:
                 continue
-            for name in ("fatal.txt", "crash.txt", "boot_trace.txt", "stage.txt"):
+            for name in ("fileio_debug.txt", "fatal.txt", "crash.txt",
+                         "boot_trace.txt", "stage.txt"):
                 try:
                     p = os.path.join(d, name)
                     if os.path.exists(p):
                         with open(p, "r", encoding="utf-8") as f:
                             body = f.read().strip()
+                        if name == "fileio_debug.txt" and len(body) > 2500:
+                            body = body[-2500:]  # 只留最近记录
                         if body:
                             parts.append(f"----- {name} -----\n{body}")
                 except Exception:
                     pass
-            if parts:
-                break
         text = "\n\n".join(parts)
-        if not text:
-            text = "\n".join(_BOOT_ERR) or "没有发现崩溃日志（说明没有 Python 层报错）。"
+        if len(text) < 30:
+            text += "\n（没有更多日志，说明没有 Python 层报错）"
         box = dialog_box(spacing=dp(8))
         scroll = ScrollView()
         detail = _label(text, 12, get_color_from_hex("#B91C1C"))
