@@ -87,7 +87,7 @@ if errorlevel 1 (
 
 REM ---------- 5. 推送（带重试，网络不好时多试几次） ----------
 git branch -M main
-echo [4/5] 正在上传到 GitHub（网络不好时会自动重试 3 次）...
+echo [4/5] 正在上传到 GitHub（本次含 1.7 万个发音约 160MB，上传明显变慢，请耐心等，会自动重试 3 次）...
 set "PUSH_OK=0"
 for /L %%i in (1,1,3) do (
     if "!PUSH_OK!"=="0" (

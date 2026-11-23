@@ -3,9 +3,10 @@
 数据层复用 vocab_app/core（纯 Python + SQLite），界面用 Kivy 重写，
 因为 PySide6 官方不支持打包 Android。全程离线：不联网、不上传任何数据。
 
-Android 发音：播放 APK 内预生成的离线音频（assets/audio），不依赖系统 TTS，
-也不依赖 jnius —— 鸿蒙卓易通没有可用语音引擎，系统 TTS 这条路是死的。
-导入：用复制粘贴，不依赖系统文件选择器（兼容层上结果接不住）。
+词库与发音：v23 起把用户全量词库（17634 词 + 194 短语）及其发音全部预生成
+打包进 APK（assets/builtin_dict.json + assets/audio），装上即用、无需导入。
+发音只播放本地文件，不依赖系统 TTS / jnius —— 鸿蒙卓易通没有可用语音引擎。
+要背的文章仍用复制粘贴粘贴到识别页（不依赖系统文件选择器，兼容层接不住结果）。
 数据目录：Android 上通过环境变量 VOCAB_DATA_DIR 指向 app 私有可写目录。
 """
 
@@ -551,7 +552,7 @@ class DictScreen(Screen):
         root = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(14))
         self.stat = _label("", 15, C_MUTED)
         root.add_widget(self.stat)
-        root.add_widget(_label("① 把 TXT 内容复制粘贴到下面（每行一条：单词 [音标] 释义）", 14, C_TEXT))
+        root.add_widget(_label("基础词库已内置全部单词并自带发音，无需再导入。下面可手动补录个别词：", 14, C_TEXT))
         self.text = TextInput(font_name=FONT, font_size=sp(15), multiline=True,
                               hint_text="apple /ˈæp.əl/ n. 苹果\ntake part in  参与",
                               size_hint=(1, 0.4), background_color=C_CARD,
@@ -588,13 +589,13 @@ class DictScreen(Screen):
         toast("导入完成", msg)
 
     def how_to_import(self, *_):
-        toast("如何导入 TXT 词库",
-              "手机系统的文件选择在这台设备上不可用，所以改成最可靠的复制粘贴：\n"
-              "1. 用手机自带的文件管理器/微信打开你的 TXT；\n"
-              "2. 长按内容→全选→复制；\n"
-              "3. 回到本页，长按上方输入框→粘贴；\n"
-              "4. 点「导入粘贴」。每行按「单词 释义」即可。\n"
-              "想马上体验：直接点绿色按钮「植入内置词库」，自带 416 个常用词且都能朗读。")
+        toast("基础词库说明",
+              "你要背的 17634 个单词和发音已经全部内置在 APK 里，装好就有，不用导入。\n"
+              "只有遇到词库里没有的个别新词，才需要：\n"
+              "1. 用微信/文件管理器打开你的 TXT；\n"
+              "2. 长按→全选→复制；\n"
+              "3. 回到本页长按输入框→粘贴；\n"
+              "4. 点「导入粘贴」。每行按「单词 释义」即可。")
 
     def install_builtin(self, *_):
         def do():
@@ -602,7 +603,7 @@ class DictScreen(Screen):
             n, msg = app.db.install_builtin_library()
             self.refresh()
             toast("内置词库", msg)
-        confirm("植入内置词库", "将 222 个常用单词 + 194 个短语写入基础词库（含发音，已有词条不覆盖），继续？", do)
+        confirm("植入内置词库", "把内置的 17634 个单词 + 常见短语补回基础词库（已有词条不覆盖）。正常装好会自动植入，此按钮仅用于误删后恢复，继续？", do)
 
 
 class ImportScreen(Screen):

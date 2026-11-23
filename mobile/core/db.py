@@ -12,8 +12,9 @@
   从已背库移出只删关系，词条主档和其它库完全不受影响。
 * ``mark_log`` 记录每次标记，已背库可显示具体背诵日期（年月日）与次数。
 
-默认**空白启动**：不会自动灌任何词条，基础词库由用户自己导入。
-用户主动点「植入内置标准词库」时才会把 assets 里的常用词 / 短语写进来。
+v23 起**全新数据库自动植入内置全量词库**（17634 词 + 194 短语，均带发音），
+APK 装上即用，无需用户手动导入。已有数据的库不会被改动；
+「植入内置标准词库」按钮仅作误删后恢复。
 旧版 v1 数据库会自动迁移，原有单词、背诵日期、熟练度、批次全部保留。
 """
 
@@ -263,6 +264,29 @@ class VocabDB:
             con.commit()
         finally:
             con.close()
+        # 自动补齐内置全量词库：APK 装上即具备识别 + 朗读能力，不再要求用户手动点。
+        # 判定：库里 source='builtin' 的词条数远少于全量（v22 旧库只有 416 条时）就补植入。
+        # INSERT OR IGNORE 只增不覆盖——用户已有词条、背诵进度、自定义词全部保留。
+        # 失败不影响启动——最坏情况退回手动植入。
+        try:
+            con2 = self._connect()
+            try:
+                builtin_n = con2.execute(
+                    "SELECT COUNT(*) FROM dict_entries WHERE source='builtin'"
+                ).fetchone()[0]
+                # 期望的内置单词数（从词库 JSON 读，读不到就用阈值兜底）
+                try:
+                    with open(BUILTIN_WORDS_JSON, encoding="utf-8") as _f:
+                        expect = len(json.load(_f))
+                except Exception:
+                    expect = 17000
+                if builtin_n < expect * 0.9:
+                    self._seed_builtin(con2, force=True)
+                    con2.commit()
+            finally:
+                con2.close()
+        except Exception:
+            pass
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path, timeout=15)
