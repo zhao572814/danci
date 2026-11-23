@@ -7,7 +7,7 @@ package.domain = com.zhao572814
 
 # 源码目录：buildozer 在 mobile/ 下运行，main.py 也在那里
 source.dir = .
-source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,ttc,txt
+source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,ttc,txt,mp3
 # 这些目录不打包进 APK
 source.exclude_dirs = data, __pycache__, build, bin
 
