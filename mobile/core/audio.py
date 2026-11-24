@@ -136,9 +136,19 @@ def speak(word: str) -> tuple[bool, str]:
     k = key_of(word)
     path = os.path.join(AUDIO_DIR, k + ".mp3")
     if not os.path.exists(path):
-        # 自动记入缺词清单，供用户一键导出→电脑批量生成发音→下一版装上就能读
+        # 内置没有的词（用户补录的生词）：用 APK 内置的 sherpa-onnx 引擎现场合成，
+        # 当场出声，不用导出清单、不用发我、不用等下一版。
+        try:
+            from core import tts_live
+            live_ok, live_msg = tts_live.speak(word)
+            if live_ok:
+                return True, ""
+        except Exception:
+            live_msg = "现场合成模块未就绪"
+        # 现场合成也失败才记入清单（兜底），并如实告知
         record_missing(word)
-        return False, f"'{word}' 还没有发音。已自动记入「缺发音清单」，可在设置页一键复制发我，我批量生成后打进下一版；这个词可先用「看中文背诵」或「查看模式」。"
+        return False, (f"'{word}' 暂时读不出来（现场合成：{live_msg}）。"
+                       f"已记入「缺发音清单」，可先用「看中文背诵」或「查看模式」。")
     try:
         from kivy.core.audio import SoundLoader  # type: ignore
         if _SOUND is not None:

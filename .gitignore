@@ -36,3 +36,12 @@ desktop.ini
 
 # ===== 内部工作记录，不上传 =====
 .workbuddy/
+
+# ===== TTS 构建期原始资源（大文件，不上传；精简成品放 jni_libs/ 由 add_jars/add_libs 打包） =====
+mobile/tts_res/*.aar
+mobile/tts_res/*.bz2
+mobile/tts_res/*.log
+mobile/tts_res/fetch.py
+mobile/tts_res/lexicon-en-us.txt
+mobile/tts_res/tmpaar/
+mobile/tts_res/packed/

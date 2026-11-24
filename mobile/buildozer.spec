@@ -7,9 +7,11 @@ package.domain = com.zhao572814
 
 # 源码目录：buildozer 在 mobile/ 下运行，main.py 也在那里
 source.dir = .
-source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,ttc,txt,mp3
-# 这些目录不打包进 APK
-source.exclude_dirs = data, __pycache__, build, bin
+source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,ttc,txt,mp3,onnx
+# 这些目录不打包进 APK（作为普通源码资源）
+# tts_res/jni_libs 只通过 android.add_jars/add_libs 打进 APK 的 libs/，
+# 不当普通资源重复拷贝（它们的 .so/.jar 也不在 include_exts 里）。
+source.exclude_dirs = data, __pycache__, build, bin, tts_res, jni_libs, tools
 
 version = 1.0.0
 
@@ -31,6 +33,12 @@ android.minapi = 21
 # 只打 arm64-v8a：Mate 80 等现代机型都是 64 位，包更小、编译更快
 # 新版 buildozer 用 android.archs（复数），旧写法 android.arch 会告警
 android.archs = arm64-v8a
+
+# 现场离线 TTS（sherpa-onnx）：让用户补录的任意词当场能读。
+# classes.jar 提供 Java API，so 是推理引擎。均已精简为只留 arm64 组件。
+# 模型在 assets/tts_model/（onnx 60MB + lexicon + tokens），随 source 打包。
+android.add_jars = jni_libs/classes.jar
+android.add_libs_arm64_v8a = jni_libs/jni/arm64-v8a/*.so
 
 # 让 App  Private Storage 可写（默认即可，显式声明避免个别机型限制）
 android.private_storage = True

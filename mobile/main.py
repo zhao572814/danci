@@ -484,7 +484,13 @@ class TTS:
 
     def status_text(self):
         n = offline_audio.count()
-        return f"朗读引擎：离线音频（已内置 {n} 条发音，无需联网/系统语音）"
+        base = f"内置音频 {n} 条（已验证可用）"
+        try:
+            from core import tts_live
+            base += "\n" + tts_live.status_text()
+        except Exception:
+            base += "\n现场合成：未打包"
+        return "朗读引擎：" + base
 
     def open_settings(self):
         """离线版无需系统设置，给明确说明即可。返回 (False, 原因)。"""
@@ -1002,7 +1008,7 @@ class SettingsScreen(Screen):
                              on_press=self.tts_diag))
         root.add_widget(_btn("查看崩溃日志 / 导入记录（排查用）", bg=C_LINE, color=C_TEXT,
                              on_press=self.show_crash))
-        root.add_widget(_btn("缺发音词清单（导出发我批量生成）", bg=C_PRIMARY,
+        root.add_widget(_btn("朗读异常记录（排查用）", bg=C_LINE, color=C_TEXT,
                              on_press=self.show_missing_audio))
         root.add_widget(_label("词库本 · 手机版 1.0\n纯离线 · 数据只保存在本机", 13,
                                C_MUTED, halign="center"))
@@ -1104,30 +1110,18 @@ class SettingsScreen(Screen):
         p.open()
 
     def show_missing_audio(self, *_):
-        """列出词库里所有没有内置发音的词 + 点朗读失败时自动记录的词。
-        用可全选复制的文本框展示（不依赖系统剪贴板接口），用户发我后批量生成。"""
-        app = App.get_running_app()
-        miss = []
-        try:
-            entries = app.db.list_entries(limit=1000000)
-            heads = [e.get("headword", "") for e in entries]
-            miss = offline_audio.missing_from_list(heads)
-        except Exception as e:
-            toast("清单", f"扫描词库失败：{type(e).__name__}: {e}")
-            return
-        # 合并此前点朗读失败时记下的词（可能不在词库里）
-        for w in offline_audio.missing_recorded():
-            if w.strip() and w.strip().lower() not in {m.lower() for m in miss}:
-                miss.append(w.strip())
+        """排查用：列出点朗读时连现场合成都失败的词（正常词都能读，这里通常是空的）。
+        可全选复制发我排查。"""
+        miss = offline_audio.missing_recorded()  # 只有朗读失败才记，正常补录词不会进来
 
         box = dialog_box(spacing=dp(8))
-        n_lbl = _label(f"共 {len(miss)} 个词还没有发音", 15, C_PRIMARY)
+        n_lbl = _label(f"朗读异常记录：{len(miss)} 个词", 15, C_PRIMARY)
         box.add_widget(n_lbl)
-        tip = _label("下面全选复制，发给我；我批量生成发音打进下一版 APK，装上后这些词点朗读就能出声。",
+        tip = _label("正常情况下这里是空的——补录的词会现场合成直接出声。若这里有词，说明这些词连现场合成也失败了，可全选复制发我排查。",
                      12, C_TEXT)
         tip.text_size = (dp(320), None)
         box.add_widget(tip)
-        content = "\n".join(miss) if miss else "（没有缺发音的词，全部都能朗读）"
+        content = "\n".join(miss) if miss else "（没有异常记录，朗读都正常）"
         ti = TextInput(font_name=FONT, font_size=sp(14), text=content,
                        background_color=C_CARD, foreground_color=C_TEXT,
                        readonly=True, size_hint=(1, 1))
@@ -1143,23 +1137,22 @@ class SettingsScreen(Screen):
 
         def _select(*_):
             ti.select_all()
-            # 尽力复制到系统剪贴板；失败也不影响手动长按选择
             try:
                 from kivy.core.clipboard import Clipboard
                 Clipboard.copy(ti.text)
-                toast("已复制", "已全选并复制，去微信粘贴发我即可")
+                toast("已复制", "已全选并复制，可发我排查")
             except Exception:
-                toast("已全选", "已全选，长按文本框→复制，再发我")
+                toast("已全选", "已全选，长按文本框→复制")
 
         def _clear(*_):
             offline_audio.clear_missing()
-            toast("已清空", "缺词记录已清空（词库里仍缺发音的词下次扫描还会列出）")
+            toast("已清空", "异常记录已清空")
             p.dismiss()
 
         sel.bind(on_press=_select)
         clr.bind(on_press=_clear)
         close.bind(on_press=lambda *_: p.dismiss())
-        p = Popup(title="缺发音词清单（发我批量生成）", title_font=FONT, content=box,
+        p = Popup(title="朗读异常记录（排查用）", title_font=FONT, content=box,
                   size_hint=(0.92, 0.9))
         p.open()
 
