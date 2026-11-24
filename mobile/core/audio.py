@@ -55,6 +55,78 @@ def count() -> int:
     return len(_INDEX)
 
 
+# ---------------------------------------------------------------- 缺发音词清单
+# 用户补录的词、识别出的生词若没有内置发音，点朗读会失败。
+# 这里把"想读但读不了"的词自动记到可写数据目录，供一键导出 → 电脑批量生成音频。
+def _data_dir() -> str:
+    return os.environ.get("VOCAB_DATA_DIR") or os.path.expanduser("~")
+
+
+def _missing_path() -> str:
+    return os.path.join(_data_dir(), "missing_audio.txt")
+
+
+def record_missing(word: str) -> bool:
+    """记录一个想读但没有内置发音的词（去重）。返回是否新记录。失败静默。"""
+    w = (word or "").strip()
+    if not w:
+        return False
+    try:
+        p = _missing_path()
+        existing = []
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                existing = [x.strip() for x in f.read().splitlines() if x.strip()]
+        if any(x.lower() == w.lower() for x in existing):
+            return False
+        existing.append(w)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("\n".join(existing) + "\n")
+        return True
+    except Exception:
+        return False
+
+
+def missing_recorded() -> list[str]:
+    """读取此前点朗读失败时自动记录过的词。"""
+    try:
+        p = _missing_path()
+        if not os.path.exists(p):
+            return []
+        with open(p, encoding="utf-8") as f:
+            return [x.strip() for x in f.read().splitlines() if x.strip()]
+    except Exception:
+        return []
+
+
+def clear_missing() -> None:
+    """批量生成并装入新版后，清空缺词记录。"""
+    try:
+        p = _missing_path()
+        if os.path.exists(p):
+            os.remove(p)
+    except Exception:
+        pass
+
+
+def missing_from_list(words) -> list[str]:
+    """从给定词表里筛出没有内置发音的词（纯内存比对，快）。"""
+    _ensure_index()
+    miss = []
+    seen = set()
+    for w in words:
+        w = (w or "").strip()
+        if not w:
+            continue
+        lw = w.lower()
+        if lw in seen:
+            continue
+        seen.add(lw)
+        if key_of(w) not in _INDEX:
+            miss.append(w)
+    return miss
+
+
 def speak(word: str) -> tuple[bool, str]:
     """播放单词发音。返回 (成功, 说明)。纯本地，无网络、无系统接口。"""
     global _SOUND, _LAST_ERR
@@ -64,7 +136,9 @@ def speak(word: str) -> tuple[bool, str]:
     k = key_of(word)
     path = os.path.join(AUDIO_DIR, k + ".mp3")
     if not os.path.exists(path):
-        return False, f"'{word}' 没有内置发音（只预置了内置词库里的常用词）。可先用「看中文背诵」或「查看模式」。"
+        # 自动记入缺词清单，供用户一键导出→电脑批量生成发音→下一版装上就能读
+        record_missing(word)
+        return False, f"'{word}' 还没有发音。已自动记入「缺发音清单」，可在设置页一键复制发我，我批量生成后打进下一版；这个词可先用「看中文背诵」或「查看模式」。"
     try:
         from kivy.core.audio import SoundLoader  # type: ignore
         if _SOUND is not None:

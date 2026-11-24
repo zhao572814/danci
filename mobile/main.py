@@ -253,6 +253,23 @@ for _fp in (
             pass
 FONT = "NotoSC" if _FONT_REGISTERED else "Roboto"
 
+# ---------------------------------------------------------------- IPA 音标字体
+# simhei 不含国际音标，音标会显示成豆腐块 □。单独打进一个 45KB 的 IPA 字体，
+# 查看模式用富文本 [font=IPA]...[/font] 只把音标部分换成它渲染。
+_IPA_REGISTERED = False
+for _fp in (
+    os.path.join(BASE, "assets", "fonts", "ipa.ttf"),
+    os.path.join(os.getcwd(), "assets", "fonts", "ipa.ttf"),
+):
+    if os.path.exists(_fp):
+        try:
+            LabelBase.register(name="IPA", fn_regular=_fp)
+            _IPA_REGISTERED = True
+            break
+        except Exception:
+            pass
+IPA_FONT = "IPA" if _IPA_REGISTERED else FONT
+
 # ---------------------------------------------------------------- 主题色
 C_PRIMARY = get_color_from_hex("#2563EB")
 C_PRIMARY_D = get_color_from_hex("#1D4ED8")
@@ -613,22 +630,26 @@ class ImportScreen(Screen):
         super().__init__(**kw)
         root = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(14))
         root.add_widget(_label("要背的单词 / 文章：导入文件或粘贴文本", 16))
-        root.add_widget(_label("把要背的英文内容复制粘贴到下面，再点「识别文本」", 14, C_TEXT))
+        root.add_widget(_label("点「导入文件」选 TXT/PDF，或把英文粘贴到下面，再点「识别文本」", 14, C_TEXT))
         self.text = TextInput(font_name=FONT, font_size=sp(15), multiline=True,
                               hint_text="把英文段落/文章粘贴到这里，程序会从基础词库里挑出要背的单词和短语",
                               size_hint=(1, 0.3), background_color=C_CARD,
                               foreground_color=C_TEXT)
         root.add_widget(self.text)
         opt = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(44))
-        opt.add_widget(_btn("如何导入？", bg=C_LINE, color=C_TEXT, size=14,
+        opt.add_widget(_btn("导入文件", bg=C_PRIMARY, size=14,
+                            on_press=self.import_file))
+        opt.add_widget(_btn("说明", bg=C_LINE, color=C_TEXT, size=14,
                             on_press=self.how_to_import))
+        root.add_widget(opt)
+        opt2 = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(44))
         self.chk_stop = Button(text="过滤虚词：关", font_name=FONT, font_size=sp(12),
                                background_color=C_LINE, color=C_TEXT,
                                size_hint_y=None, height=dp(44))
         self.chk_stop.bind(on_press=self.toggle_stop)
-        opt.add_widget(self.chk_stop)
-        opt.add_widget(_btn("识别文本", bg=C_OK, size=14, on_press=self.recognize))
-        root.add_widget(opt)
+        opt2.add_widget(self.chk_stop)
+        opt2.add_widget(_btn("识别文本", bg=C_OK, size=14, on_press=self.recognize))
+        root.add_widget(opt2)
         self.hint = _label("识别后在此勾选要背的条目", 13, C_MUTED)
         root.add_widget(self.hint)
         self.list = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
@@ -645,14 +666,75 @@ class ImportScreen(Screen):
         self.filter_stop = not self.filter_stop
         self.chk_stop.text = f"过滤虚词：{'开' if self.filter_stop else '关'}"
 
+    def import_file(self, *_):
+        """调起系统文件选择器，导入 TXT/PDF 的文字到输入框；图片尽力 OCR。"""
+        def _done(name, data, err):
+            def _on_ui(*_args):
+                if err:
+                    # 附最近几条诊断，方便用户一次截图就能定位，不用再来回试
+                    dbg = ""
+                    try:
+                        d = getattr(App.get_running_app(), "data_dir", "")
+                        p = os.path.join(d, "fileio_debug.txt")
+                        if os.path.exists(p):
+                            lines = open(p, encoding="utf-8").read().strip().splitlines()
+                            dbg = "\n".join(lines[-6:])
+                    except Exception:
+                        pass
+                    toast("导入失败", f"{err}\n{dbg}\n（或点「说明」改用粘贴）")
+                    return
+                kind = classify(name)
+                if kind == "pdf":
+                    text, note = extract_pdf_text(data)
+                    if not text:
+                        toast("PDF 无文字", note or "这份 PDF 读不到文字，请用微信/相册提取文字后粘贴")
+                        return
+                elif kind == "text":
+                    text = decode_text(data)
+                elif kind == "image":
+                    # 图片 OCR：优先用设备/系统能力，失败给出明确替代路径
+                    ok, text, note = self._ocr_image(data, name)
+                    if not ok:
+                        toast("图片识别", note)
+                        return
+                else:
+                    text = decode_text(data)
+                    if not text.strip():
+                        toast("导入", "这个文件类型读不出文字，请改用 TXT/PDF 或复制粘贴")
+                        return
+                self.text.text = (self.text.text.strip() + "\n" + text).strip()
+                self.hint.text = f"已导入「{name}」的文字，点「识别文本」挑词"
+                toast("导入成功", f"已从 {name} 读出文字，请点「识别文本」")
+            try:
+                Clock.schedule_once(_on_ui, 0)
+            except Exception:
+                _on_ui()
+        try:
+            pick_file(_done, mime="*/*")
+        except Exception as e:
+            toast("导入", f"打不开文件选择：{type(e).__name__}: {e}")
+
+    def _ocr_image(self, data: bytes, name: str):
+        """图片文字识别：纯离线环境无可靠引擎，明确降级。
+        返回 (成功, 文本, 提示)。若日后接入 OCR 引擎，只需替换本函数。"""
+        try:
+            from core.fileio import extract_image_text
+            ok, text, note = extract_image_text(data)
+            if ok and text.strip():
+                return True, text, ""
+        except Exception:
+            pass
+        return False, "", (
+            "图片里的英文目前需在手机相册/微信里用「提取文字 / 扫一扫」转成文字，"
+            "再长按粘贴到上面的输入框——这样最可靠，也不受系统接口限制。")
+
     def how_to_import(self, *_):
         toast("如何导入要背的内容",
-              "手机系统的文件选择在这台设备上不可用，改用复制粘贴（最可靠）：\n"
-              "1. 用文件管理器/微信打开你的 TXT、PDF 或文章；\n"
-              "2. 长按→全选→复制（PDF 先在阅读器里复制文字）；\n"
-              "3. 回到本页长按输入框→粘贴；\n"
-              "4. 点「识别文本」，程序会从基础词库里挑出要背的词。\n"
-              "图片里的英文：用相册/微信「提取文字」后复制，同样粘贴到这里。")
+              "点「导入文件」可选 TXT / PDF（能直接读出文字）；图片请先用微信/相册的"
+              "「提取文字 / 扫一扫」转成文字。\n"
+              "若「导入文件」在设备上没反应：用文件管理器/微信打开文件→长按全选复制→"
+              "回本页长按输入框粘贴→点「识别文本」。\n"
+              "仍不行时，到「设置 → 查看崩溃日志 / 导入记录」把内容截图发开发者。")
 
     def recognize(self, *_):
         app = App.get_running_app()
@@ -732,7 +814,7 @@ class StudyScreen(Screen):
         self.prompt = _label("", 24, C_PRIMARY, halign="center", valign="middle",
                              size_hint_y=1)  # 撑满卡片并垂直居中，消除上方大块空白
         self.prompt.text_size = (dp(320), None)
-        self.extra = _label("", 15, C_MUTED, halign="center")
+        self.extra = _label("", 15, C_MUTED, halign="center", markup=True)
         self.extra.text_size = (dp(320), None)
         self.card.add_widget(self.prompt)
         self.card.add_widget(self.extra)
@@ -802,9 +884,12 @@ class StudyScreen(Screen):
         else:
             w = self.current
             self.prompt.text = w.get("word", "")
-            self.extra.text = (f"音标：{w.get('phonetic') or '—'}\n"
-                               f"解释：{w.get('translation') or '—'}\n"
-                               f"例句：{w.get('example') or '—'}")
+            # 音标用 IPA 字体单独渲染（simhei 不含音标字符会显示成方块）。
+            # Kivy 富文本里 [ 是标签起始符，必须转义成 &bl;（] 单独出现是普通字符，无需转义）。
+            ph = (w.get("phonetic") or "—").replace("[", "&bl;")
+            tr = (w.get("translation") or "—").replace("[", "&bl;")
+            self.extra.text = (f"音标：[font={IPA_FONT}]{ph}[/font]\n"
+                               f"解释：{tr}")
             self.extra.text_size = (dp(320), None)
         if mode == "查看模式":
             self.answer.text = self.current.get("word", "")
@@ -917,6 +1002,8 @@ class SettingsScreen(Screen):
                              on_press=self.tts_diag))
         root.add_widget(_btn("查看崩溃日志 / 导入记录（排查用）", bg=C_LINE, color=C_TEXT,
                              on_press=self.show_crash))
+        root.add_widget(_btn("缺发音词清单（导出发我批量生成）", bg=C_PRIMARY,
+                             on_press=self.show_missing_audio))
         root.add_widget(_label("词库本 · 手机版 1.0\n纯离线 · 数据只保存在本机", 13,
                                C_MUTED, halign="center"))
         self.add_widget(root)
@@ -1014,6 +1101,66 @@ class SettingsScreen(Screen):
         p = Popup(title="崩溃日志（可截图发我）", title_font=FONT, content=box,
                   size_hint=(0.92, 0.85))
         close.bind(on_press=lambda *_: p.dismiss())
+        p.open()
+
+    def show_missing_audio(self, *_):
+        """列出词库里所有没有内置发音的词 + 点朗读失败时自动记录的词。
+        用可全选复制的文本框展示（不依赖系统剪贴板接口），用户发我后批量生成。"""
+        app = App.get_running_app()
+        miss = []
+        try:
+            entries = app.db.list_entries(limit=1000000)
+            heads = [e.get("headword", "") for e in entries]
+            miss = offline_audio.missing_from_list(heads)
+        except Exception as e:
+            toast("清单", f"扫描词库失败：{type(e).__name__}: {e}")
+            return
+        # 合并此前点朗读失败时记下的词（可能不在词库里）
+        for w in offline_audio.missing_recorded():
+            if w.strip() and w.strip().lower() not in {m.lower() for m in miss}:
+                miss.append(w.strip())
+
+        box = dialog_box(spacing=dp(8))
+        n_lbl = _label(f"共 {len(miss)} 个词还没有发音", 15, C_PRIMARY)
+        box.add_widget(n_lbl)
+        tip = _label("下面全选复制，发给我；我批量生成发音打进下一版 APK，装上后这些词点朗读就能出声。",
+                     12, C_TEXT)
+        tip.text_size = (dp(320), None)
+        box.add_widget(tip)
+        content = "\n".join(miss) if miss else "（没有缺发音的词，全部都能朗读）"
+        ti = TextInput(font_name=FONT, font_size=sp(14), text=content,
+                       background_color=C_CARD, foreground_color=C_TEXT,
+                       readonly=True, size_hint=(1, 1))
+        box.add_widget(ti)
+        row = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(46))
+        sel = _btn("全选复制", bg=C_OK, size=13)
+        clr = _btn("清空记录", bg=C_LINE, color=C_TEXT, size=13)
+        close = _btn("关闭", bg=C_LINE, color=C_TEXT, size=13)
+        row.add_widget(sel)
+        row.add_widget(clr)
+        row.add_widget(close)
+        box.add_widget(row)
+
+        def _select(*_):
+            ti.select_all()
+            # 尽力复制到系统剪贴板；失败也不影响手动长按选择
+            try:
+                from kivy.core.clipboard import Clipboard
+                Clipboard.copy(ti.text)
+                toast("已复制", "已全选并复制，去微信粘贴发我即可")
+            except Exception:
+                toast("已全选", "已全选，长按文本框→复制，再发我")
+
+        def _clear(*_):
+            offline_audio.clear_missing()
+            toast("已清空", "缺词记录已清空（词库里仍缺发音的词下次扫描还会列出）")
+            p.dismiss()
+
+        sel.bind(on_press=_select)
+        clr.bind(on_press=_clear)
+        close.bind(on_press=lambda *_: p.dismiss())
+        p = Popup(title="缺发音词清单（发我批量生成）", title_font=FONT, content=box,
+                  size_hint=(0.92, 0.9))
         p.open()
 
 
