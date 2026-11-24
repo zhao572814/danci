@@ -45,3 +45,4 @@ mobile/tts_res/fetch.py
 mobile/tts_res/lexicon-en-us.txt
 mobile/tts_res/tmpaar/
 mobile/tts_res/packed/
+mobile/dict_src/

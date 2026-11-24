@@ -586,6 +586,9 @@ class DictScreen(Screen):
         row.add_widget(_btn("如何导入TXT？", bg=C_LINE, color=C_TEXT,
                             on_press=self.how_to_import))
         root.add_widget(row)
+        # 自定义发音：给任意词录音 / 导入自己的音频文件（补录生词用）
+        root.add_widget(_btn("自定义发音（录音 / 导入音频）", bg=C_WARN,
+                             on_press=self.custom_pronunciation))
         root.add_widget(_btn("植入内置词库（含发音）", bg=C_OK, on_press=self.install_builtin))
         self.add_widget(root)
 
@@ -613,12 +616,117 @@ class DictScreen(Screen):
 
     def how_to_import(self, *_):
         toast("基础词库说明",
-              "你要背的 17634 个单词和发音已经全部内置在 APK 里，装好就有，不用导入。\n"
+              "你要背的单词和发音已经全部内置在 APK 里，装好就有，不用导入。\n"
               "只有遇到词库里没有的个别新词，才需要：\n"
               "1. 用微信/文件管理器打开你的 TXT；\n"
               "2. 长按→全选→复制；\n"
               "3. 回到本页长按输入框→粘贴；\n"
               "4. 点「导入粘贴」。每行按「单词 释义」即可。")
+
+    # ---------------------------------------------------------- 自定义发音
+    def custom_pronunciation(self, *_):
+        """给任意单词配自己的发音：麦克风录音 / 导入音频文件 / 试听 / 删除。"""
+        word = (self.text.text or "").strip().splitlines()
+        word = (word[0].strip().split()[0] if word and word[0].strip() else "")
+        self._custom_word = word
+        box = dialog_box()
+        self._custom_word_input = TextInput(
+            font_name=FONT, font_size=sp(16), multiline=False,
+            text=word, hint_text="输入要配音的单词（如 are）",
+            size_hint=(1, None), height=dp(46),
+            background_color=C_CARD, foreground_color=C_TEXT)
+        box.add_widget(self._custom_word_input)
+        from core import custom_audio
+        n = custom_audio.count()
+        box.add_widget(_label(f"已自定义 {n} 个词的发音。优先级：内置 > 自定义 > 现场合成。",
+                              12, C_MUTED))
+        row1 = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(46))
+        row1.add_widget(_btn("麦克风录音", bg=C_OK, size=13,
+                             on_press=self.custom_record))
+        row1.add_widget(_btn("导入音频文件", bg=C_PRIMARY, size=13,
+                             on_press=self.custom_import))
+        box.add_widget(row1)
+        row2 = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(46))
+        row2.add_widget(_btn("试听", bg=C_LINE, color=C_TEXT, size=13,
+                             on_press=self.custom_play))
+        row2.add_widget(_btn("删除", bg=C_WARN, size=13,
+                             on_press=self.custom_delete))
+        box.add_widget(row2)
+        box.add_widget(_btn("关闭", bg=C_LINE, color=C_TEXT, size=13,
+                            on_press=lambda inst: self._custom_popup.dismiss()))
+        self._custom_popup = Popup(title="自定义发音", title_font=FONT, content=box,
+                                   size_hint=(0.9, None), height=dp(300))
+        self._custom_popup.open()
+
+    def _custom_get_word(self) -> str:
+        try:
+            return (self._custom_word_input.text or "").strip()
+        except Exception:
+            return ""
+
+    def _custom_finish(self, msg: str):
+        Clock.schedule_once(lambda *_: toast("自定义发音", msg), 0)
+
+    def custom_record(self, *_):
+        """麦克风录音：点开始→说话→再点本按钮停止保存。"""
+        from core import custom_audio
+        word = self._custom_get_word()
+        if not word:
+            toast("录音", "请先输入单词")
+            return
+        if not getattr(self, "_recording", False):
+            # 先申请/确认麦克风权限（Android 6+ 运行时权限）
+            okp, msgp = custom_audio.ensure_mic_permission()
+            if not okp:
+                toast("录音权限", msgp)
+                return
+            ok, msg = custom_audio.record_start(word)
+            self._recording = ok
+            if ok:
+                self._custom_finish(f"开始录音：{word}。读完后再点一次「麦克风录音」结束并保存。")
+            else:
+                self._custom_finish(msg)
+        else:
+            ok, msg = custom_audio.record_stop()
+            self._recording = False
+            self._custom_finish(f"已保存「{word}」的录音" if ok else msg)
+
+    def custom_import(self, *_):
+        """从本地音频文件导入，匹配当前输入的单词。"""
+        from core import custom_audio
+        from core.fileio import pick_file
+        word = self._custom_get_word()
+        if not word:
+            toast("导入音频", "请先输入单词")
+            return
+        def _done(name, data, err):
+            def _on_ui(*_):
+                if err or not data:
+                    toast("导入音频失败", err or "文件是空的")
+                    return
+                ext = os.path.splitext(name or "")[1] or ".mp3"
+                ok, msg = custom_audio.save_bytes(word, data, ext)
+                toast("自定义发音", f"已为「{word}」导入发音：{name}" if ok else msg)
+            Clock.schedule_once(_on_ui, 0)
+        try:
+            pick_file(_done, mime="audio/*")
+        except Exception as e:
+            toast("导入音频", f"打不开文件选择：{type(e).__name__}: {e}")
+
+    def custom_play(self, *_):
+        from core import custom_audio
+        word = self._custom_get_word()
+        ok, msg = custom_audio.speak(word)
+        if not ok:
+            toast("试听", msg or f"「{word}」还没有自定义发音")
+
+    def custom_delete(self, *_):
+        from core import custom_audio
+        word = self._custom_get_word()
+        if custom_audio.remove(word):
+            self._custom_finish(f"已删除「{word}」的自定义发音")
+        else:
+            self._custom_finish(f"「{word}」没有自定义发音")
 
     def install_builtin(self, *_):
         def do():

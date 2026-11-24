@@ -23,8 +23,9 @@ requirements = python3,kivy,plyer,pyjnius
 orientation = portrait
 fullscreen = 0
 
-# 不需要任何权限：不联网、不读外部存储，数据全在 App 私有目录
-android.permissions =
+# 权限：App 本身不联网、数据都在私有目录。
+# RECORD_AUDIO 仅供用户主动点「自定义发音→麦克风录音」时使用（运行时申请）。
+android.permissions = RECORD_AUDIO
 
 # 目标与最低安卓版本：API 34 稳定主流（API 35 太新，云端 SDK 常缺该平台导致编译失败）
 android.api = 34

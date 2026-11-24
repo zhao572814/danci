@@ -221,33 +221,55 @@ def _get_android_activity():
 
 
 def _read_uri_bytes(resolver, uri):
-    """用 ContentResolver 读 content:// URI 的原始字节，不依赖 jarray。"""
-    from jnius import autoclass  # type: ignore
-    ByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
-    # 新版 pyjnius 推荐用 autoclass('[B') 建 byte[]，取代易出问题的 jarray('b')
-    try:
-        ByteArr = autoclass("[B")
-        buf = ByteArr(16384)
-    except Exception:
-        from jnius import jarray  # type: ignore  # 旧版兜底
-        buf = jarray("b")(16384)
+    """用 ContentResolver 读 content:// URI 的原始字节。
+
+    v26 修复：真机报 `ImportError: cannot import name 'jarray' from 'jnius'`，
+    原因是这个 p4a 打包的 pyjnius 没有 jarray 模块。改成三级兜底，全程不 import jarray：
+      1. Java 9+ InputStream.readAllBytes()（一步读完，最快）；
+      2. autoclass('[B') 建 byte[] 缓冲分块读（多数 p4a 支持）；
+      3. 逐字节 read() 写进 Python bytearray（最慢但零依赖，几百 KB 文本足够）。
+    """
     stream = resolver.openInputStream(uri)
     if stream is None:
         return None, "无法打开这个文件，请换一个试试"
-    baos = ByteArrayOutputStream()
     try:
+        # 方案 1：Java 层一次读完
+        try:
+            raw = stream.readAllBytes()  # Java 9+；鸿蒙runtime通常支持
+            if raw is not None:
+                return bytes((int(x) & 0xFF) for x in raw), ""
+        except Exception as e1:
+            _debug("readAllBytes 不可用: %s" % e1)
+        # 方案 2：autoclass('[B') 建 byte[] 分块读（不用 jarray）
+        try:
+            from jnius import autoclass  # type: ignore
+            BAOS = autoclass("java.io.ByteArrayOutputStream")
+            buf = autoclass("[B")(16384)
+            baos = BAOS()
+            while True:
+                count = stream.read(buf)
+                if count is None or count <= 0:
+                    break
+                baos.write(buf, 0, count)
+            raw = baos.toByteArray()
+            return bytes((int(x) & 0xFF) for x in raw), ""
+        except Exception as e2:
+            _debug("[B]缓冲不可用，改逐字节: %s" % e2)
+        # 方案 3：逐字节读进 Python bytearray（零依赖兜底）
+        out = bytearray()
         while True:
-            count = stream.read(buf)
-            if count is None or count <= 0:
+            b = stream.read()
+            if b is None or b < 0:
                 break
-            baos.write(buf, 0, count)
+            out.append(int(b) & 0xFF)
+        if not out:
+            return None, "这个文件读出来是空的"
+        return bytes(out), ""
     finally:
         try:
             stream.close()
         except Exception:
             pass
-    raw = baos.toByteArray()
-    return bytes((int(x) & 0xFF) for x in raw), ""
 
 
 def _uri_display_name(resolver, uri):

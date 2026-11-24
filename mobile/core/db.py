@@ -265,22 +265,38 @@ class VocabDB:
         finally:
             con.close()
         # 自动补齐内置全量词库：APK 装上即具备识别 + 朗读能力，不再要求用户手动点。
-        # 判定：库里 source='builtin' 的词条数远少于全量（v22 旧库只有 416 条时）就补植入。
-        # INSERT OR IGNORE 只增不覆盖——用户已有词条、背诵进度、自定义词全部保留。
+        # v26 改进：改成「精确差集」判定——只要内置 JSON 里有任何一个词还不在库里
+        # 就补植入（INSERT OR IGNORE 只增不覆盖，用户词条/背诵进度/自定义词全保留）。
+        # 旧逻辑用数量阈值（builtin_n < expect*0.9），新版只多 147 个词时不会触发，
+        # 导致 are/is/was 等新增高频词永远进不了老用户的库 —— 用户实际踩到了这个坑。
         # 失败不影响启动——最坏情况退回手动植入。
         try:
             con2 = self._connect()
             try:
-                builtin_n = con2.execute(
-                    "SELECT COUNT(*) FROM dict_entries WHERE source='builtin'"
-                ).fetchone()[0]
-                # 期望的内置单词数（从词库 JSON 读，读不到就用阈值兜底）
                 try:
                     with open(BUILTIN_WORDS_JSON, encoding="utf-8") as _f:
-                        expect = len(json.load(_f))
+                        builtin_data = json.load(_f)
                 except Exception:
-                    expect = 17000
-                if builtin_n < expect * 0.9:
+                    builtin_data = {}
+                need_seed = False
+                if builtin_data:
+                    have = {
+                        (r[0] or "").lower() for r in
+                        con2.execute("SELECT headword FROM dict_entries").fetchall()
+                    }
+                    # 抽样比对：发现任一内置词缺失即补种（全量 INSERT OR IGNORE 幂等）
+                    need_seed = any(
+                        clean_headword(hw).lower() not in have
+                        for hw in builtin_data
+                        if clean_headword(hw)
+                    )
+                else:
+                    # JSON 读不到时退回数量阈值兜底
+                    builtin_n = con2.execute(
+                        "SELECT COUNT(*) FROM dict_entries WHERE source='builtin'"
+                    ).fetchone()[0]
+                    need_seed = builtin_n < 17000 * 0.9
+                if need_seed:
                     self._seed_builtin(con2, force=True)
                     con2.commit()
             finally:

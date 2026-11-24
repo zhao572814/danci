@@ -88168,5 +88168,740 @@
   "phonetic": "/,sɛntrəlɪ'zeʃən/",
   "translation": "n. 集中化；中央集权管理",
   "example": ""
+ },
+ "acre": {
+  "phonetic": "/ˈeikə/",
+  "translation": "n.英亩(=6.07 亩)",
+  "example": ""
+ },
+ "adverb": {
+  "phonetic": "/ˈædvəːb/",
+  "translation": "n.副词",
+  "example": ""
+ },
+ "aeroplane": {
+  "phonetic": "/ˈeərəplein/",
+  "translation": "n.飞机",
+  "example": ""
+ },
+ "africa": {
+  "phonetic": "/ˈæfrikə/",
+  "translation": "n.非洲",
+  "example": ""
+ },
+ "aluminium": {
+  "phonetic": "/ˌæljuːˈminjəm/",
+  "translation": "n.铝",
+  "example": ""
+ },
+ "a.m": {
+  "phonetic": "",
+  "translation": "(缩)上午，午前",
+  "example": ""
+ },
+ "america": {
+  "phonetic": "/əˈmerikə/",
+  "translation": "n.美洲；美国",
+  "example": ""
+ },
+ "ampere": {
+  "phonetic": "/ˈæmpiər/",
+  "translation": "n.安培",
+  "example": ""
+ },
+ "april": {
+  "phonetic": "/ˈeiprəl/",
+  "translation": "n.四月",
+  "example": ""
+ },
+ "asia": {
+  "phonetic": "/ˈei∫ə/",
+  "translation": "n.亚洲",
+  "example": ""
+ },
+ "atlantic": {
+  "phonetic": "/ətˈlæntik/",
+  "translation": "a.大西洋的 n.大西洋",
+  "example": ""
+ },
+ "august": {
+  "phonetic": "/ˈɔːgəst/",
+  "translation": "n.八月",
+  "example": ""
+ },
+ "australia": {
+  "phonetic": "/ɔsˈtreiljə/",
+  "translation": "n.澳大利亚",
+  "example": ""
+ },
+ "badminton": {
+  "phonetic": "/ˈbædmintən/",
+  "translation": "n.羽毛球",
+  "example": ""
+ },
+ "b.c.": {
+  "phonetic": "",
+  "translation": "(缩)公元前",
+  "example": ""
+ },
+ "britain": {
+  "phonetic": "/ˈbritən/",
+  "translation": "n.不列颠，英国",
+  "example": ""
+ },
+ "canada": {
+  "phonetic": "/ˈkænədə/",
+  "translation": "n.加拿大",
+  "example": ""
+ },
+ "cent": {
+  "phonetic": "/sent/",
+  "translation": "n.分；分币；百",
+  "example": ""
+ },
+ "centigrade": {
+  "phonetic": "/ˈsentigreid/",
+  "translation": "a.百分度的",
+  "example": ""
+ },
+ "centimetre": {
+  "phonetic": "/ˈsentiˌmiːtə/",
+  "translation": "n.公分，厘米",
+  "example": ""
+ },
+ "centre": {
+  "phonetic": "/ˈsentə/",
+  "translation": "n.中心；中枢 vt.集中",
+  "example": ""
+ },
+ "cheque": {
+  "phonetic": "/t∫ek/",
+  "translation": "n.支票",
+  "example": ""
+ },
+ "civilize": {
+  "phonetic": "/ˈsivilaiz/",
+  "translation": "vt.使文明；教育",
+  "example": ""
+ },
+ "congratulation": {
+  "phonetic": "/kənˌgrætjuˈlei∫ən/",
+  "translation": "n.祝贺(词)",
+  "example": ""
+ },
+ "december": {
+  "phonetic": "/diˈsembə/",
+  "translation": "n.十二月",
+  "example": ""
+ },
+ "defence": {
+  "phonetic": "/diˈfens/",
+  "translation": "n.防御；防务；辩护",
+  "example": ""
+ },
+ "dictation": {
+  "phonetic": "/dikˈtei∫ən/",
+  "translation": "n.口授笔录，听写",
+  "example": ""
+ },
+ "dishonor": {
+  "phonetic": "/disˈɔnə/",
+  "translation": "n.不光彩；丢脸的人",
+  "example": ""
+ },
+ "displease": {
+  "phonetic": "/disˈpliːz/",
+  "translation": "vt.使不愉快，使生气",
+  "example": ""
+ },
+ "dissatisfy": {
+  "phonetic": "/ˈdisˈsætisfai/",
+  "translation": "vi.使不满，使不平",
+  "example": ""
+ },
+ "dollar": {
+  "phonetic": "/ˈdɔlə/",
+  "translation": "n.元(货币单位)",
+  "example": ""
+ },
+ "england": {
+  "phonetic": "/ˈinglənd/",
+  "translation": "n.英格兰；英国",
+  "example": ""
+ },
+ "europe": {
+  "phonetic": "/ˈjuərəp/",
+  "translation": "n.欧洲",
+  "example": ""
+ },
+ "fahrenheit": {
+  "phonetic": "/ˈfærənhait/",
+  "translation": "n.华氏温度计",
+  "example": ""
+ },
+ "farther": {
+  "phonetic": "/ˈfɑːðə/",
+  "translation": "ad.更远地 a.更远的",
+  "example": ""
+ },
+ "favour": {
+  "phonetic": "/ˈfeivə/",
+  "translation": "n.好感；赞同；恩惠",
+  "example": ""
+ },
+ "favourable": {
+  "phonetic": "/ˈfeiərəbl/",
+  "translation": "a.有利的；赞成的",
+  "example": ""
+ },
+ "favourite": {
+  "phonetic": "/ˈfeivərit/",
+  "translation": "a.特别受喜爱的",
+  "example": ""
+ },
+ "february": {
+  "phonetic": "/ˈfebruəri/",
+  "translation": "n.二月",
+  "example": ""
+ },
+ "fibre": {
+  "phonetic": "/ˈfaibə/",
+  "translation": "n.纤维，纤维质",
+  "example": ""
+ },
+ "flavour": {
+  "phonetic": "/ˈfleivə/",
+  "translation": "n.味，味道；风味",
+  "example": ""
+ },
+ "fortnight": {
+  "phonetic": "/ˈfɔːtnait/",
+  "translation": "n.两星期，十四天",
+  "example": ""
+ },
+ "france": {
+  "phonetic": "/frɑːns/",
+  "translation": "n.法国，法兰西",
+  "example": ""
+ },
+ "friday": {
+  "phonetic": "/ˈfraidi/",
+  "translation": "n.星期五",
+  "example": ""
+ },
+ "gallon": {
+  "phonetic": "/ˈgælən/",
+  "translation": "n.加仑",
+  "example": ""
+ },
+ "germany": {
+  "phonetic": "/ˈdʒəːməni/",
+  "translation": "n.德意志，德国",
+  "example": ""
+ },
+ "goods": {
+  "phonetic": "/gudz/",
+  "translation": "n.货物，商品",
+  "example": ""
+ },
+ "gramme": {
+  "phonetic": "/græm/",
+  "translation": "n.克(重量单位)",
+  "example": ""
+ },
+ "grey": {
+  "phonetic": "/grei/",
+  "translation": "a.灰色的 n.灰色",
+  "example": ""
+ },
+ "harbour": {
+  "phonetic": "/ˈhɑːbə/",
+  "translation": "n.海港，港口 vt.庇护",
+  "example": ""
+ },
+ "honour": {
+  "phonetic": "/ˈɔnə/",
+  "translation": "n.光荣；尊敬，敬意",
+  "example": ""
+ },
+ "honourable": {
+  "phonetic": "/ˈɔnərəbl/",
+  "translation": "a.诚实的；光荣的",
+  "example": ""
+ },
+ "humour": {
+  "phonetic": "/ˈhjuːmə/",
+  "translation": "n.幽默，诙谐，幽默感",
+  "example": ""
+ },
+ "i.e.": {
+  "phonetic": "/ˈaiˈiː/",
+  "translation": "(=that is)那就是，即",
+  "example": ""
+ },
+ "india": {
+  "phonetic": "/ˈindjə/",
+  "translation": "n.印度",
+  "example": ""
+ },
+ "industrialize": {
+  "phonetic": "/inˈdʌstriəlaiz/",
+  "translation": "vt.使工业化",
+  "example": ""
+ },
+ "january": {
+  "phonetic": "/ˈdʒænjuəri/",
+  "translation": "n.一月",
+  "example": ""
+ },
+ "japan": {
+  "phonetic": "/dʒəˈpæn/",
+  "translation": "n.日本，日本国",
+  "example": ""
+ },
+ "july": {
+  "phonetic": "/dʒu(ː)ˈlai/",
+  "translation": "n.七月",
+  "example": ""
+ },
+ "june": {
+  "phonetic": "/dʒuːn/",
+  "translation": "n.六月",
+  "example": ""
+ },
+ "kilogram": {
+  "phonetic": "/ˈkiləgræm/",
+  "translation": "n.千克，公斤",
+  "example": ""
+ },
+ "kilometer": {
+  "phonetic": "/ˈkiləmiːtə/",
+  "translation": "n.千米，公里",
+  "example": ""
+ },
+ "lavatory": {
+  "phonetic": "/ˈlævəˌtəri/",
+  "translation": "n.盥洗室，厕所",
+  "example": ""
+ },
+ "living-room": {
+  "phonetic": "",
+  "translation": "n.起居室",
+  "example": ""
+ },
+ "lorry": {
+  "phonetic": "/ˈlɔri/",
+  "translation": "n.运货汽车，卡车",
+  "example": ""
+ },
+ "maths": {
+  "phonetic": "/mæθs/",
+  "translation": "n.(英)数学",
+  "example": ""
+ },
+ "means": {
+  "phonetic": "/miːnz/",
+  "translation": "n.方法，手段，工具",
+  "example": ""
+ },
+ "mechanics": {
+  "phonetic": "/miˈkæniks/",
+  "translation": "n.力学；技术性细节",
+  "example": ""
+ },
+ "metre": {
+  "phonetic": "/ˈmiːtə/",
+  "translation": "n.米，公尺",
+  "example": ""
+ },
+ "microcomputer": {
+  "phonetic": "/ˈmaikrəukəmpjuːtə(r)/",
+  "translation": "n.微型计算机，微机",
+  "example": ""
+ },
+ "mile": {
+  "phonetic": "/mail/",
+  "translation": "n.英里",
+  "example": ""
+ },
+ "millimetre": {
+  "phonetic": "/ˈmiliˌmiːtə(r)/",
+  "translation": "n.毫米",
+  "example": ""
+ },
+ "monday": {
+  "phonetic": "/ˈmʌndei/",
+  "translation": "n.星期一",
+  "example": ""
+ },
+ "mould": {
+  "phonetic": "/məuld/",
+  "translation": "n.模子，模型 vt.浇铸",
+  "example": ""
+ },
+ "mutton": {
+  "phonetic": "/ˈmʌtn/",
+  "translation": "n.羊肉",
+  "example": ""
+ },
+ "neighbour": {
+  "phonetic": "/ˈneibə/",
+  "translation": "n.邻居，邻国，邻人",
+  "example": ""
+ },
+ "neighbourhood": {
+  "phonetic": "/ˈneibəhud/",
+  "translation": "n.邻居关系；邻近",
+  "example": ""
+ },
+ "november": {
+  "phonetic": "/nəuˈvembə/",
+  "translation": "n.十一月",
+  "example": ""
+ },
+ "oceania": {
+  "phonetic": "/ˌəu∫iˈeiniə/",
+  "translation": "n.大洋洲",
+  "example": ""
+ },
+ "october": {
+  "phonetic": "/ɔkˈtəubə/",
+  "translation": "n.十月",
+  "example": ""
+ },
+ "odour": {
+  "phonetic": "/ˈəudə/",
+  "translation": "n.气味，香气；味道",
+  "example": ""
+ },
+ "ounce": {
+  "phonetic": "/auns/",
+  "translation": "n.盎司，英两",
+  "example": ""
+ },
+ "outskirt": {
+  "phonetic": "/ˈautskəːt/",
+  "translation": "n.外边，郊区",
+  "example": ""
+ },
+ "outwards": {
+  "phonetic": "/ˈautwədz/",
+  "translation": "ad.向外，往海外",
+  "example": ""
+ },
+ "ox": {
+  "phonetic": "/ɔks/",
+  "translation": "n.牛；公牛，阉牛",
+  "example": ""
+ },
+ "pacific": {
+  "phonetic": "/pəˈsifik/",
+  "translation": "a.和平的 n.太平洋",
+  "example": ""
+ },
+ "penny": {
+  "phonetic": "/ˈpeni/",
+  "translation": "n.(英)便士；(美)分",
+  "example": ""
+ },
+ "percent": {
+  "phonetic": "/pəˈsent/",
+  "translation": "n.百分之…",
+  "example": ""
+ },
+ "petrol": {
+  "phonetic": "/ˈpetrəl/",
+  "translation": "n.(英)汽油",
+  "example": ""
+ },
+ "pint": {
+  "phonetic": "/paint/",
+  "translation": "n.品脱",
+  "example": ""
+ },
+ "plough": {
+  "phonetic": "/plau/",
+  "translation": "n.犁 vt.&vi.犁，耕",
+  "example": ""
+ },
+ "p.m.": {
+  "phonetic": "",
+  "translation": "n.下午，午后",
+  "example": ""
+ },
+ "postman": {
+  "phonetic": "/ˈpəustmən/",
+  "translation": "n.邮递员",
+  "example": ""
+ },
+ "practise": {
+  "phonetic": "/ˈpræktis/",
+  "translation": "vt.练习，实习，训练",
+  "example": ""
+ },
+ "preposition": {
+  "phonetic": "/ˌprepəˈzi∫ən/",
+  "translation": "n.前置词，介词",
+  "example": ""
+ },
+ "punctual": {
+  "phonetic": "/ˈpʌŋktjuəl/",
+  "translation": "a.严守时刻的；准时的",
+  "example": ""
+ },
+ "quart": {
+  "phonetic": "/kɔːt/",
+  "translation": "n.夸脱(=2 品脱)",
+  "example": ""
+ },
+ "radioactivity": {
+  "phonetic": "/ˈreidiəuækˈtiviti/",
+  "translation": "n.放射性，放射(现象)",
+  "example": ""
+ },
+ "radium": {
+  "phonetic": "/ˈreidjəm/",
+  "translation": "n.镭",
+  "example": ""
+ },
+ "reflexion": {
+  "phonetic": "/riˈflek∫ən/",
+  "translation": "n.反射；映象；反映",
+  "example": ""
+ },
+ "retell": {
+  "phonetic": "/ˈriːˈtel/",
+  "translation": "vt.再讲，重述，复述",
+  "example": ""
+ },
+ "rumour": {
+  "phonetic": "/ˈruːmə/",
+  "translation": "n.谣言，谣传，传闻",
+  "example": ""
+ },
+ "saturday": {
+  "phonetic": "/ˈsætədi/",
+  "translation": "n.星期六",
+  "example": ""
+ },
+ "seaport": {
+  "phonetic": "/ˈsiːpɔːt/",
+  "translation": "n.海港，港市",
+  "example": ""
+ },
+ "september": {
+  "phonetic": "/səpˈtembə/",
+  "translation": "n.九月",
+  "example": ""
+ },
+ "shilling": {
+  "phonetic": "/ˈ∫iliŋ/",
+  "translation": "n.先令",
+  "example": ""
+ },
+ "speciality": {
+  "phonetic": "/ˌspe∫iˈæliti/",
+  "translation": "n.专业，特长；特产",
+  "example": ""
+ },
+ "stewardess": {
+  "phonetic": "/ˈstjuːədis/",
+  "translation": "n.空中小姐，女乘务员",
+  "example": ""
+ },
+ "storey": {
+  "phonetic": "/ˈstɔːri/",
+  "translation": "n.(层)楼",
+  "example": ""
+ },
+ "sulphur": {
+  "phonetic": "/ˈsʌlfə/",
+  "translation": "n.硫(磺)，硫黄",
+  "example": ""
+ },
+ "sunday": {
+  "phonetic": "/ˈsʌndi/",
+  "translation": "n.星期日，礼拜日",
+  "example": ""
+ },
+ "theatre": {
+  "phonetic": "/ˈθiətə(r)/",
+  "translation": "n.戏院；戏剧；教室",
+  "example": ""
+ },
+ "thirdly": {
+  "phonetic": "/ˈθəːdli/",
+  "translation": "ad.第三",
+  "example": ""
+ },
+ "thursday": {
+  "phonetic": "/ˈθəːzdi/",
+  "translation": "n.星期四",
+  "example": ""
+ },
+ "ton": {
+  "phonetic": "/tʌn/",
+  "translation": "n.吨；大量",
+  "example": ""
+ },
+ "tuesday": {
+  "phonetic": "/ˈtjuːzdi/",
+  "translation": "n.星期二",
+  "example": ""
+ },
+ "typhoon": {
+  "phonetic": "/taiˈfuːn/",
+  "translation": "n.台风",
+  "example": ""
+ },
+ "typist": {
+  "phonetic": "/ˈtaipist/",
+  "translation": "n.打字员",
+  "example": ""
+ },
+ "tyre": {
+  "phonetic": "/ˈtaiə/",
+  "translation": "n.轮胎，车胎",
+  "example": ""
+ },
+ "vapour": {
+  "phonetic": "/ˈveipə/",
+  "translation": "n.汽，蒸气",
+  "example": ""
+ },
+ "volt": {
+  "phonetic": "/vəult/",
+  "translation": "n.伏特，伏",
+  "example": ""
+ },
+ "waggon": {
+  "phonetic": "/ˈwægən/",
+  "translation": "n.四轮运货马车",
+  "example": ""
+ },
+ "waken": {
+  "phonetic": "/ˈweikən/",
+  "translation": "vi.醒来 vt.弄醒",
+  "example": ""
+ },
+ "wednesday": {
+  "phonetic": "/ˈwenzdei/",
+  "translation": "n.星期三",
+  "example": ""
+ },
+ "whitewash": {
+  "phonetic": "/ˈ(h)waitwɔ∫/",
+  "translation": "vt.粉刷，涂白",
+  "example": ""
+ },
+ "woollen": {
+  "phonetic": "/ˈwulin/",
+  "translation": "a.羊毛制的，毛线的",
+  "example": ""
+ },
+ "world-wide": {
+  "phonetic": "/ˈwəːldwaid/",
+  "translation": "a.遍及全球的",
+  "example": ""
+ },
+ "worse": {
+  "phonetic": "/wəːs/",
+  "translation": "a.更坏的 ad.更坏",
+  "example": ""
+ },
+ "worst": {
+  "phonetic": "/wəːst/",
+  "translation": "a.最坏的 ad.最坏地",
+  "example": ""
+ },
+ "are": {
+  "phonetic": "/ɑː;ə/",
+  "translation": "v. 是（be 的现在时复数形式及第二人称单数）",
+  "example": ""
+ },
+ "is": {
+  "phonetic": "/ɪz/",
+  "translation": "v. 是（be 的现在时第三人称单数）",
+  "example": ""
+ },
+ "was": {
+  "phonetic": "/wɒz;wəz/",
+  "translation": "v. 是（be 的过去时单数）",
+  "example": ""
+ },
+ "were": {
+  "phonetic": "/wɜː;wə/",
+  "translation": "v. 是（be 的过去时复数/虚拟语气）",
+  "example": ""
+ },
+ "been": {
+  "phonetic": "/biːn/",
+  "translation": "v. 是（be 的过去分词）",
+  "example": ""
+ },
+ "has": {
+  "phonetic": "/hæz;həz/",
+  "translation": "v. 有（have 的第三人称单数）",
+  "example": ""
+ },
+ "had": {
+  "phonetic": "/hæd;həd/",
+  "translation": "v. 有（have 的过去式/过去分词）",
+  "example": ""
+ },
+ "does": {
+  "phonetic": "/dʌz;dəz/",
+  "translation": "v. 做（do 的第三人称单数）；助动词",
+  "example": ""
+ },
+ "did": {
+  "phonetic": "/dɪd/",
+  "translation": "v. 做（do 的过去式）；助动词",
+  "example": ""
+ },
+ "doing": {
+  "phonetic": "/ˈduːɪŋ/",
+  "translation": "v. 做（do 的现在分词）",
+  "example": ""
+ },
+ "went": {
+  "phonetic": "/went/",
+  "translation": "v. 去（go 的过去式）",
+  "example": ""
+ },
+ "gone": {
+  "phonetic": "/ɡɒn;ɡɔːn/",
+  "translation": "v. 去（go 的过去分词）",
+  "example": ""
+ },
+ "got": {
+  "phonetic": "/ɡɒt/",
+  "translation": "v. 得到（get 的过去式/过去分词）",
+  "example": ""
+ },
+ "made": {
+  "phonetic": "/meɪd/",
+  "translation": "v. 做、制造（make 的过去式/过去分词）",
+  "example": ""
+ },
+ "took": {
+  "phonetic": "/tʊk/",
+  "translation": "v. 拿、带（take 的过去式）",
+  "example": ""
+ },
+ "seen": {
+  "phonetic": "/siːn/",
+  "translation": "v. 看见（see 的过去分词）",
+  "example": ""
+ },
+ "knew": {
+  "phonetic": "/njuː;nuː/",
+  "translation": "v. 知道（know 的过去式）",
+  "example": ""
+ },
+ "kept": {
+  "phonetic": "/kept/",
+  "translation": "v. 保持（keep 的过去式/过去分词）",
+  "example": ""
  }
 }
