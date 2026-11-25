@@ -12,12 +12,97 @@
 
 from __future__ import annotations
 
+import re
 from typing import Callable, Iterable
 
 from .db import clean_headword
 from .extract import STOPWORDS, WORD_RE, normalize_word
 
 MAX_PHRASE_WORDS = 7
+
+# 词性缩写（带点的写法），如 "adv." "n." "prep." —— 只在"词表行"里剔除，
+# 它们是释义的一部分，不是词条本身。
+_POS_RE = re.compile(
+    r"\b(?:n|v|vt|vi|adj|adv|prep|conj|pron|art|int|num|aux|phr|abbr|pl|sing)\.\s*",
+    re.I,
+)
+# 音标块：/.../（含 IPA 字符），必须整块剔除，否则里面的拉丁字母会被
+# WORD_RE 当成单词（例如 /ˈkeəflɪ/ → ke fli），把单词和音标拼成假短语。
+_IPA_SLASH_RE = re.compile(r"/[^/\n]{1,48}/")
+_IPA_BRACKET_RE = re.compile(r"\[[^\[\]\n]{1,48}\]")
+# 行首序号：1. / 1、/ (1) / ① / 一、
+_ORDINAL_RE = re.compile(r"^\s*(?:\(?\d{1,3}\)?[\.、\)]|[①②③④⑤⑥⑦⑧⑨⑩]|[一二三四五六七八九十]+[、\.])\s*")
+# 中文/日文字符与中文标点（词表里的释义部分）
+_CJK_RE = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+")
+
+
+def _parse_entry_line(line: str) -> str | None:
+    """把词表里的一行解析成纯英文词条；不是有效词条行返回 None。
+
+    规则（严格按用户要求）：
+      * 一行只出一条：整行的英文词序列就是这一条（1 个词=单词，多个=短语）；
+      * 音标 /.../ [...]、词性缩写 adv. n.、中文释义 全部剔除，不进词条；
+      * 因为先剔音标，绝不会把 "carefully /ˈkeəflɪ/ adv. 认真地" 拼成
+        "carefully ke fli adv" 这种假短语；
+      * 中文在上、英文在下的排版：纯英文行正常解析，纯中文行返回 None。
+    """
+    s = _ORDINAL_RE.sub("", line or "")
+    if not s.strip():
+        return None
+    # 1) 整块剔除音标（必须先做，否则音标里的拉丁字母会混进词条）
+    s = _IPA_SLASH_RE.sub(" ", s)
+    s = _IPA_BRACKET_RE.sub(" ", s)
+    # 2) 剔除词性缩写与中文释义
+    s = _POS_RE.sub(" ", s)
+    parts = _CJK_RE.split(s)
+    # 中文可能在前（"锻炼一小时 exercise for an hour"）或在后，
+    # 也可能一行只有中文——把所有片段里的英文词都收集起来。
+    eng = " ".join(m.group(0) for m in WORD_RE.finditer(" ".join(parts)))
+    if not eng:
+        return None
+    return eng.strip()
+
+
+def detect_table_items(text: str) -> list[dict] | None:
+    """词表模式：文本像"每行一个词条"的单词/短语表时，按行整条识别。
+
+    返回 None 表示"不是词表格式"，调用方应回退到文章模式（查词库挑词）。
+    这样既能整条认出词库里没有的短语，也不会把普通文章误切成词条。
+    """
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return None
+    parsed = [_parse_entry_line(ln) for ln in lines]
+    valid = [p for p in parsed if p]
+    if len(valid) < 2:
+        return None
+    # 词表特征：能解析出英文的行里，绝大多数是"短词条"（1~7 词）。
+    # 注意分母用 valid（有英文的行），不能用 lines——词表里常是"中文释义 +
+    # 英文词条"各占一行，中文行解析不出英文，算进分母会把词表误判成文章。
+    # 真正的文章每行是长句（>7 词），valid 里短行比例低，不会误判。
+    short = sum(1 for p in valid if len(p.split()) <= MAX_PHRASE_WORDS)
+    if short / len(valid) < 0.85:
+        return None
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for p in parsed:
+        if not p:
+            continue
+        words = [normalize_word(m.group(0)) for m in WORD_RE.finditer(p)]
+        words = [w for w in words if w]
+        if not words or len(words) > MAX_PHRASE_WORDS:
+            continue
+        # 单词/短语判定：词数 >1 即短语；虚词开头的短语（in class / on TV）
+        # 要整条保留，不能用 STOPWORDS 过滤掉 in/on。
+        hw = clean_headword(" ".join(words))
+        key = hw.lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({"headword": hw,
+                    "kind": "phrase" if len(words) > 1 else "word"})
+    return out or None
 
 
 def detect_items(
@@ -27,7 +112,14 @@ def detect_items(
     detect_phrases: bool = True,
     min_len: int = 2,
 ) -> list[dict]:
-    """返回按出现顺序、去重的候选条目：[{'headword':..., 'kind':'word'|'phrase'}]。"""
+    """返回按出现顺序、去重的候选条目：[{'headword':..., 'kind':'word'|'phrase'}]。
+
+    优先词表模式（每行一条，短语整条识别、单词不被音标污染）；
+    不是词表时回退到文章模式（按词切分 + 词库短语最长匹配）。
+    """
+    table = detect_table_items(text)
+    if table is not None:
+        return table
     tokens = [normalize_word(m.group(0)) for m in WORD_RE.finditer(text or "")]
     n = len(tokens)
 

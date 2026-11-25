@@ -273,21 +273,31 @@ class VocabDB:
         try:
             con2 = self._connect()
             try:
-                try:
-                    with open(BUILTIN_WORDS_JSON, encoding="utf-8") as _f:
-                        builtin_data = json.load(_f)
-                except Exception:
-                    builtin_data = {}
+                def _load(path):
+                    try:
+                        with open(path, encoding="utf-8") as _f:
+                            return json.load(_f)
+                    except Exception:
+                        return {}
+
+                builtin_data = _load(BUILTIN_WORDS_JSON)
+                # v29: 短语表也要纳入差集检测。之前只查单词 JSON，导致内置了
+                # 新短语后老用户库里一条都补不进去（短语被永久漏掉）。
+                phrase_data = _load(BUILTIN_PHRASES_JSON)
                 need_seed = False
-                if builtin_data:
+                all_builtin = {}
+                all_builtin.update(builtin_data or {})
+                all_builtin.update(phrase_data or {})
+                if all_builtin:
                     have = {
                         (r[0] or "").lower() for r in
                         con2.execute("SELECT headword FROM dict_entries").fetchall()
                     }
-                    # 抽样比对：发现任一内置词缺失即补种（全量 INSERT OR IGNORE 幂等）
+                    # 差集比对：发现任一内置词条（单词或短语）缺失即补种。
+                    # 全量 INSERT OR IGNORE 幂等，用户词条/背诵进度全保留。
                     need_seed = any(
                         clean_headword(hw).lower() not in have
-                        for hw in builtin_data
+                        for hw in all_builtin
                         if clean_headword(hw)
                     )
                 else:
