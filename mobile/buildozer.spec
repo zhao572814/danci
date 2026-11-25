@@ -5,6 +5,9 @@ title = 词库本
 package.name = ciku
 package.domain = com.zhao572814
 
+# 应用图标（v28）：青蓝渐变 + 打开的书 + 字母 A，避免与默认黑色三角图标混淆
+icon = icon.png
+
 # 源码目录：buildozer 在 mobile/ 下运行，main.py 也在那里
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,json,ttf,otf,ttc,txt,mp3,onnx,traineddata
@@ -23,9 +26,10 @@ requirements = python3,kivy,plyer,pyjnius
 orientation = portrait
 fullscreen = 0
 
-# 权限：App 本身不联网、数据都在私有目录。
-# RECORD_AUDIO 仅供用户主动点「自定义发音→麦克风录音」时使用（运行时申请）。
-android.permissions = RECORD_AUDIO
+# 权限：App 不联网、不录音、数据都在私有目录，不需要任何系统权限。
+# v28 移除麦克风录音（部分设备如鸿蒙卓易通不支持），改为从本地导入音频文件，
+# 通过 ACTION_GET_CONTENT 的 content:// URI 读取，无需 READ_EXTERNAL_STORAGE。
+android.permissions =
 
 # 目标与最低安卓版本：API 34 稳定主流（API 35 太新，云端 SDK 常缺该平台导致编译失败）
 android.api = 34
