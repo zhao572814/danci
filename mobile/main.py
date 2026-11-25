@@ -228,7 +228,7 @@ from kivy.utils import get_color_from_hex
 from kivy.clock import Clock
 
 from core.db import VocabDB, parse_entry_lines
-from core.matcher import detect_items, annotate
+from core.matcher import detect_items, annotate, filter_garbage
 from core.users import UserManager
 from core.models import SCOPE_INBOX, SCOPE_MASTERED
 from core.fileio import pick_file, classify, decode_text, extract_pdf_text
@@ -751,6 +751,9 @@ class ImportScreen(Screen):
         items = detect_items(self.text.text, phrases,
                              filter_stopwords=self.filter_stop, detect_phrases=True, min_len=1)
         annotate(items, app.db.lookup_entry)
+        # 剔除 OCR 把中文/音标误读出来的乱码碎片（如 KRK/TH/g/k），
+        # 词库词、短语、用户补录的条目一律保留
+        items = filter_garbage(items)
         self.candidates = items
         self.render_candidates()
         self.hint.text = f"识别到 {len(items)} 个候选，取消勾选可排除："

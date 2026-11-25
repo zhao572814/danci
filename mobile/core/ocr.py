@@ -1,11 +1,18 @@
-"""离线图片文字识别（OCR）：tesseract4android + 内置英文训练数据。
+"""离线图片文字识别（OCR）：tesseract4android + 内置中英文训练数据。
 
 完全离线、不联网、不依赖 GMS。识别流程：
-  1. 首次使用时把 assets/tessdata/eng.traineddata 复制到 App 私有目录
+  1. 首次使用时把 assets/tessdata/ 下的 chi_sim + eng 复制到 App 私有目录
      （tesseract 的 native 层必须读真实文件路径，不能直接读 APK 里的 asset）；
   2. 把选中的图片字节写到私有目录的临时文件，用 Android BitmapFactory 解码；
-  3. pyjnius 调 TessBaseAPI.init/setImage/getUTF8Text 出文字；
+  3. pyjnius 调 TessBaseAPI.init/setImage/getUTF8Text 出文字（chi_sim+eng 双语）；
   4. 每次识别后 recycle 释放 native 实例，避免内存堆积。
+
+为什么必须加中文：教材词表是「中文释义在上、英文词条在下」排版，只用英文模型
+时中文标题会被硬读成英文乱码（如 WEA) LEBA），污染候选。中文模型能把中文正确
+读成汉字，识别层再把汉字剔除，英文行就干净了。
+
+降级保护：中文模型缺失或双语初始化失败时自动退回 eng 单语，保证纯英文图片
+仍能识别，不让 App 崩。
 
 全程 try/except，任何一步失败都返回 (False, "", 原因)，不让 App 崩。
 """
@@ -15,7 +22,8 @@ import os
 
 # 引擎与模型在打包时的位置
 OEM_DEFAULT = 3            # TessBaseAPI.OEM_DEFAULT：自动识别引擎模式，兼容 tessdata_fast
-_TRAIN_ASSET = "tessdata/eng.traineddata"
+_TRAIN_ASSETS = ("tessdata/chi_sim.traineddata", "tessdata/eng.traineddata")
+_LANG = "chi_sim+eng"      # 双语：中文标题 + 英文词条一起读
 _TESS_DIRNAME = "tesseract"  # App 私有目录下的工作目录，内含 tessdata/
 
 _INIT_FAILED = None  # 缓存初始化失败原因，避免每次点都重复走一遍坏路径
@@ -41,62 +49,83 @@ def _log(line: str) -> None:
         pass
 
 
+def _read_asset_bytes(am, asset_path: str) -> bytes:
+    """从 APK assets 读一个文件的全部字节（不用 jarray，避开 p4a 坑）。"""
+    raw = am.open(asset_path)  # Java InputStream
+    try:
+        try:
+            allb = raw.readAllBytes()
+            if allb is not None:
+                data = bytes((int(x) & 0xFF) for x in allb)
+                if data:
+                    return data
+        except Exception:
+            pass
+        raw.reset()
+        out = bytearray()
+        while True:
+            b = raw.read()
+            if b is None or b < 0:
+                break
+            out.append(int(b) & 0xFF)
+        return bytes(out)
+    finally:
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+
 def _ensure_traineddata() -> str:
-    """确保私有目录里有 eng.traineddata，返回 tesseract 数据根目录。
-    已复制过且大小正常就直接返回（4MB 文件只复制一次）。
+    """确保私有目录里有 chi_sim + eng 两个训练数据，返回 tesseract 数据根目录。
+
+    中文模型是可选增强：缺失/复制失败只跳过中文，不阻断英文识别。
+    已复制过且大小正常的文件直接跳过（模型只复制一次）。
     """
     root = work_dir()
     td_dir = os.path.join(root, "tessdata")
-    target = os.path.join(td_dir, "eng.traineddata")
-    if os.path.exists(target) and os.path.getsize(target) > 3_000_000:
-        return root
     os.makedirs(td_dir, exist_ok=True)
-    # 从 APK assets 复制到私有目录：一次读全部字节（不用 jarray，避开 p4a 坑）
+    # 最小合法大小：chi_sim 约 2.4MB，eng 约 4MB，统一按 1MB 判定，过小视为损坏
+    min_size = 1_000_000
+
+    def ready(name: str) -> bool:
+        target = os.path.join(td_dir, name)
+        return os.path.exists(target) and os.path.getsize(target) > min_size
+
+    missing = [n for n in ("chi_sim.traineddata", "eng.traineddata") if not ready(n)]
+    if not missing:
+        return root
+
     try:
         from jnius import autoclass  # type: ignore
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        activity = PythonActivity.mActivity
-        am = activity.getAssets()
-        raw = am.open(_TRAIN_ASSET)  # Java InputStream
-        data = None
-        try:
-            try:
-                allb = raw.readAllBytes()
-                if allb is not None:
-                    data = bytes((int(x) & 0xFF) for x in allb)
-            except Exception:
-                raw.reset()
-                out = bytearray()
-                while True:
-                    b = raw.read()
-                    if b is None or b < 0:
-                        break
-                    out.append(int(b) & 0xFF)
-                data = bytes(out)
-        finally:
-            try:
-                raw.close()
-            except Exception:
-                pass
-        if not data or len(data) < 3_000_000:
-            raise RuntimeError(f"训练数据读取不完整（{len(data) if data else 0} 字节）")
-        with open(target, "wb") as f:
-            f.write(data)
-        _log(f"训练数据已复制到 {target} ({len(data)} 字节)")
-        return root
+        am = PythonActivity.mActivity.getAssets()
+        for name in missing:
+            asset = "tessdata/" + name
+            data = _read_asset_bytes(am, asset)
+            if len(data) < min_size:
+                _log(f"跳过 {name}：assets 里读取不完整（{len(data)} 字节）")
+                continue
+            with open(os.path.join(td_dir, name), "wb") as f:
+                f.write(data)
+            _log(f"训练数据已复制：{name} ({len(data)} 字节)")
     except Exception as e:
         # 桌面调试：直接从源码 assets 读
-        try:
-            src = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                               "assets", "tessdata", "eng.traineddata")
-            if os.path.exists(src) and os.path.getsize(src) > 3_000_000:
-                with open(src, "rb") as f, open(target, "wb") as g:
-                    g.write(f.read())
-                _log(f"训练数据（本地调试）已复制 ({os.path.getsize(target)} 字节)")
-                return root
-        except Exception:
-            pass
-        raise RuntimeError(f"无法准备 OCR 训练数据：{type(e).__name__}: {e}")
+        src_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                               "assets", "tessdata")
+        for name in missing:
+            try:
+                src = os.path.join(src_dir, name)
+                if os.path.exists(src) and os.path.getsize(src) > min_size:
+                    with open(src, "rb") as f, open(os.path.join(td_dir, name), "wb") as g:
+                        g.write(f.read())
+                    _log(f"训练数据（本地调试）已复制：{name}")
+            except Exception:
+                pass
+    # 英文是底线：没有它 OCR 无法工作
+    if not ready("eng.traineddata"):
+        raise RuntimeError("无法准备 OCR 英文训练数据（eng.traineddata 缺失或过小）")
+    return root
 
 
 def extract_text(data: bytes) -> tuple[bool, str, str]:
@@ -123,13 +152,26 @@ def extract_text(data: bytes) -> tuple[bool, str, str]:
             return False, "", "图片解码失败，请换一张 JPG/PNG 图片试试"
 
         tess = TessBaseAPI()
-        ok = tess.init(root, "eng", OEM_DEFAULT)
+        # 优先中英双语；中文模型异常时降级为英文单语，保证纯英文图片仍可用
+        has_chi = (os.path.exists(os.path.join(root, "tessdata", "chi_sim.traineddata"))
+                   and os.path.getsize(os.path.join(root, "tessdata", "chi_sim.traineddata")) > 1_000_000)
+        lang = _LANG if has_chi else "eng"
+        ok = tess.init(root, lang, OEM_DEFAULT)
+        if not ok and lang != "eng":
+            _log("双语初始化失败，降级 eng 单语")
+            try:
+                tess.recycle()
+            except Exception:
+                pass
+            tess = TessBaseAPI()
+            ok = tess.init(root, "eng", OEM_DEFAULT)
+            lang = "eng"
         if not ok:
             raise RuntimeError("OCR 引擎初始化失败（训练数据路径或模型不对）")
         tess.setImage(bitmap)
         text = tess.getUTF8Text() or ""
         text = str(text).strip()
-        _log(f"识别完成：{len(text)} 字符")
+        _log(f"识别完成：lang={lang}，{len(text)} 字符")
         if not text:
             return False, "", "图片里没识别出文字，请换一张更清晰、文字更大的图片"
         return True, text, ""

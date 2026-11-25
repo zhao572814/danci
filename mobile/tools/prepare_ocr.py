@@ -1,9 +1,10 @@
-"""把 tesseract4android AAR 解包成 buildozer 需要的结构，并放置英文训练数据。
+"""把 tesseract4android AAR 解包成 buildozer 需要的结构，并放置中英文训练数据。
 
 产物：
 * jni_libs/classes.jar       —— 合并 sherpa-onnx + tesseract 的 Java 类（无包名冲突）
 * jni_libs/jni/arm64-v8a/    —— 追加 tesseract 的 4 个 so（libtesseract/leptonica/jpeg/pngx）
-* assets/tessdata/eng.traineddata —— OCR 英文模型（运行时会被复制到 App 私有目录）
+* assets/tessdata/eng.traineddata    —— OCR 英文模型
+* assets/tessdata/chi_sim.traineddata —— OCR 简体中文模型（读中文释义，避免乱码）
 
 原始 AAR / traineddata 放在 ocr_res/，由 .gitignore 排除，不上传 GitHub
 （这里只是构建期中转，成品已经在 jni_libs/ 和 assets/ 里了）。
@@ -17,7 +18,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AAR = os.path.join(ROOT, "ocr_res", "tesseract4android.aar")
-TRAIN = os.path.join(ROOT, "ocr_res", "eng.traineddata")
+TRAINS = ("eng.traineddata", "chi_sim.traineddata")
 JNI = os.path.join(ROOT, "jni_libs")
 CLASSES = os.path.join(JNI, "classes.jar")
 SO_DIR = os.path.join(JNI, "jni", "arm64-v8a")
@@ -47,8 +48,9 @@ def merge_classes(aar_jar_bytes: bytes):
 def main():
     if not os.path.exists(AAR):
         raise SystemExit(f"缺少 AAR：{AAR}")
-    if not os.path.exists(TRAIN):
-        raise SystemExit(f"缺少训练数据：{TRAIN}")
+    for name in TRAINS:
+        if not os.path.exists(os.path.join(ROOT, "ocr_res", name)):
+            raise SystemExit(f"缺少训练数据：ocr_res/{name}")
     os.makedirs(SO_DIR, exist_ok=True)
     os.makedirs(TESSDATA_DIR, exist_ok=True)
 
@@ -67,10 +69,12 @@ def main():
     z.close()
     print(f"共拷贝 {n_so} 个 arm64 so")
 
-    # 3) 放置训练数据
-    out_train = os.path.join(TESSDATA_DIR, "eng.traineddata")
-    shutil.copyfile(TRAIN, out_train)
-    print(f"训练数据：{out_train} {os.path.getsize(out_train)} 字节")
+    # 3) 放置训练数据（英文 + 中文）
+    for name in TRAINS:
+        src = os.path.join(ROOT, "ocr_res", name)
+        out_train = os.path.join(TESSDATA_DIR, name)
+        shutil.copyfile(src, out_train)
+        print(f"训练数据：{out_train} {os.path.getsize(out_train)} 字节")
 
 
 if __name__ == "__main__":

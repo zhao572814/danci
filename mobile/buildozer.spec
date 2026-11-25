@@ -42,7 +42,7 @@ android.archs = arm64-v8a
 # 现场离线 TTS（sherpa-onnx）+ 离线图片 OCR（tesseract4android）：
 # classes.jar 已合并两套 Java API（com.k2fsa.* 与 com.googlecode.* 无冲突）；
 # so 目录含两套 arm64 组件（onnxruntime/sherpa + tesseract/leptonica/jpeg/pngx）。
-# TTS 模型在 assets/tts_model/，OCR 英文模型在 assets/tessdata/eng.traineddata，均随 source 打包。
+# TTS 模型在 assets/tts_model/，OCR 中英文模型在 assets/tessdata/（chi_sim + eng），均随 source 打包。
 android.add_jars = jni_libs/classes.jar
 android.add_libs_arm64_v8a = jni_libs/jni/arm64-v8a/*.so
 

@@ -126,9 +126,16 @@ def detect_items(
     phrase_map: dict[tuple[str, ...], str] = {}
     if detect_phrases:
         for p in phrase_headwords:
-            parts = tuple(clean_headword(p).lower().split())
+            hw = clean_headword(p)
+            parts = tuple(hw.lower().split())
             if 2 <= len(parts) <= MAX_PHRASE_WORDS:
-                phrase_map[parts] = clean_headword(p)
+                phrase_map[parts] = hw
+            # OCR 常把斜杠读成空格：eat/have breakfast → eat have breakfast。
+            # 为这类「或」词条同时注册空格变体，仍能整条认出并命中原词条（含音频）。
+            if "/" in hw:
+                alt = tuple(hw.lower().replace("/", " ").split())
+                if 2 <= len(alt) <= MAX_PHRASE_WORDS and alt not in phrase_map:
+                    phrase_map[alt] = hw
     max_n = min(MAX_PHRASE_WORDS, max((len(k) for k in phrase_map), default=1))
 
     covered = [False] * n
@@ -182,6 +189,55 @@ def annotate(items: list[dict], lookup: Callable[[str], dict | None]) -> list[di
         it["translation"] = (entry or {}).get("translation", "")
         it["pending"] = bool(entry and entry.get("source") == "pending")
     return items
+
+
+# OCR 把中文标题/音标误读出来的碎片有明显特征：
+# 全大写无元音短块（KRK/TH/ERK/BNF/SHR）、夹在其中的孤立大写、单字母。
+# 正常英文单词至少有一个元音字母；真实缩写（NASA/TOEFL）虽然无元音但都在词库里，
+# 所以只丢「不在词库」的异常块，绝不误伤词库词和用户自己补录的新词。
+_VOWELS = set("aeiouy")
+_POSISH_RE = re.compile(r"^(?:[A-Za-z]+\.)+$", re.I)
+
+
+def _looks_like_garbage(headword: str) -> bool:
+    """判断一个单词候选是否像 OCR 乱码（纯本地规则，不碰词库内容）。"""
+    w = (headword or "").strip()
+    if not w:
+        return True
+    low = w.lower()
+    # 带点的词性串（n.adv.）不是词条
+    if _POSISH_RE.match(w):
+        return True
+    # 单字母（g / k / x）——正常英文词条不会是单个字母
+    if len(w) <= 1:
+        return True
+    # 超长且无空格、不像英文（中文拼音连写 ettoschoolontime 之类）
+    if len(w) > 12 and " " not in w:
+        return True
+    # 无元音的块：KRK / TH / ERK / BNF / SHR / GRME
+    # 保留有元音的（含 y），避免误伤 fly / sky 等
+    if not any(c in _VOWELS for c in low):
+        return True
+    # 注意：这里刻意只保留最保守的几条规则（单字母 / 超长连写 / 无元音）。
+    # 不用「连续辅音」「全大写」这类形状猜——它们会误伤 strength / inclass /
+    # NASA / TOEFL 等正常词（实测验证过）。真正的乱码源头是 OCR 读不懂中文，
+    # 已由 chi_sim 中文模型从根上解决；这里只做无害兜底，绝不牺牲用户词条。
+    return False
+
+
+def filter_garbage(items: list[dict]) -> list[dict]:
+    """剔除明显是 OCR 乱码的「单词」候选；短语和词库里已有的词一律保留。
+
+    只在 annotate 之后调用：in_library / pending 为真说明能在库里查到，
+    即使是缩写或特殊写法也要保留。库外的异常块才丢。
+    """
+    kept = []
+    for it in items:
+        if it.get("kind") == "word" and not it.get("in_library") and not it.get("pending"):
+            if _looks_like_garbage(it.get("headword", "")):
+                continue
+        kept.append(it)
+    return kept
 
 
 def join_phrase(words: list[str]) -> str:
