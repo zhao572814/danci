@@ -744,7 +744,7 @@ class ImportScreen(Screen):
         super().__init__(**kw)
         root = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(14))
         root.add_widget(_label("要背的单词 / 文章：导入文件或粘贴文本", 16))
-        root.add_widget(_label("点「导入文件」选 TXT/PDF，或把英文粘贴到下面，再点「识别文本」", 14, C_TEXT))
+        root.add_widget(_label("点「导入文件」选 图片/TXT/PDF（图片会自动识别英文并挑词），或把英文粘贴到下面", 13, C_TEXT))
         self.text = TextInput(font_name=FONT, font_size=sp(15), multiline=True,
                               hint_text="把英文段落/文章粘贴到这里，程序会从基础词库里挑出要背的单词和短语",
                               size_hint=(1, 0.3), background_color=C_CARD,
@@ -806,11 +806,16 @@ class ImportScreen(Screen):
                 elif kind == "text":
                     text = decode_text(data)
                 elif kind == "image":
-                    # 图片 OCR：优先用设备/系统能力，失败给出明确替代路径
+                    # 内置离线 OCR 真正识别图片文字（tesseract，不联网）
                     ok, text, note = self._ocr_image(data, name)
                     if not ok:
                         toast("图片识别", note)
                         return
+                    self.text.text = (self.text.text.strip() + "\n" + text).strip()
+                    self.hint.text = f"已从图片「{name}」识别出文字"
+                    # 识别出的文字直接挑词，省得用户再点一次「识别文本」
+                    self.recognize()
+                    return
                 else:
                     text = decode_text(data)
                     if not text.strip():
@@ -829,26 +834,21 @@ class ImportScreen(Screen):
             toast("导入", f"打不开文件选择：{type(e).__name__}: {e}")
 
     def _ocr_image(self, data: bytes, name: str):
-        """图片文字识别：纯离线环境无可靠引擎，明确降级。
-        返回 (成功, 文本, 提示)。若日后接入 OCR 引擎，只需替换本函数。"""
+        """用打包进 APK 的离线 OCR 引擎识别图片文字。
+        返回 (成功, 文本, 提示)。全程离线，不联网、不依赖 GMS。"""
         try:
-            from core.fileio import extract_image_text
-            ok, text, note = extract_image_text(data)
-            if ok and text.strip():
-                return True, text, ""
-        except Exception:
-            pass
-        return False, "", (
-            "图片里的英文目前需在手机相册/微信里用「提取文字 / 扫一扫」转成文字，"
-            "再长按粘贴到上面的输入框——这样最可靠，也不受系统接口限制。")
+            from core import ocr
+            return ocr.extract_text(data)
+        except Exception as e:
+            return False, "", f"图片识别模块异常：{type(e).__name__}: {e}"
 
     def how_to_import(self, *_):
         toast("如何导入要背的内容",
-              "点「导入文件」可选 TXT / PDF（能直接读出文字）；图片请先用微信/相册的"
-              "「提取文字 / 扫一扫」转成文字。\n"
-              "若「导入文件」在设备上没反应：用文件管理器/微信打开文件→长按全选复制→"
-              "回本页长按输入框粘贴→点「识别文本」。\n"
-              "仍不行时，到「设置 → 查看崩溃日志 / 导入记录」把内容截图发开发者。")
+              "点「导入文件」，可直接选：\n"
+              "① 图片（JPG/PNG）——内置离线 OCR 自动识别英文并挑词，不联网；\n"
+              "② TXT / 文字版 PDF——直接读出文字；\n"
+              "③ 或把英文粘贴到输入框，点「识别文本」。\n"
+              "图片识别需要几秒（首次稍慢）。若识别不准确，请换清晰、字大的图片。")
 
     def recognize(self, *_):
         app = App.get_running_app()
@@ -1042,8 +1042,13 @@ class StudyScreen(Screen):
         self.advance()
 
     def reveal(self, *_):
-        if self.current:
-            toast("答案", self.current.get("word", ""))
+        """显示答案：直接把答案写回输入框，不用弹窗。
+        用户反馈 toast 弹窗里短文本因高度计算被挤得看不见，这里彻底避开弹窗。"""
+        if not self.current:
+            return
+        word = self.current.get("word", "") or "（该词暂无拼写）"
+        self.answer.text = word
+        self.extra.text = f"答案：{word}　确认一下就进入下一个"
 
     def clear_inbox(self, *_):
         def do():

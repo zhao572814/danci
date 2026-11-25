@@ -46,3 +46,6 @@ mobile/tts_res/lexicon-en-us.txt
 mobile/tts_res/tmpaar/
 mobile/tts_res/packed/
 mobile/dict_src/
+
+# ===== OCR 构建期原始资源（AAR+训练数据，不上传；成品在 jni_libs/ 和 assets/tessdata/） =====
+mobile/ocr_res/

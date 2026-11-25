@@ -127,32 +127,45 @@ _RECORDING_WORD = ""
 
 
 def ensure_mic_permission() -> tuple[bool, str]:
-    """运行时申请麦克风权限（Android 6+ 必须，光在 spec 声明不够）。"""
+    """运行时申请麦克风权限（Android 6+ 必须，光在 spec 声明不够）。
+
+    v27 关键修复：旧代码用 `android.os.Build.VERSION.SDK_INT` 判断版本，
+    pyjnius 访问 `Build.VERSION`（静态嵌套类）会抛 `AttributeError: VERSION`，
+    于是即使用户已经在系统设置里授权了麦克风，也永远弹「attribute 'VERSION'」
+    而录不了音。现在直接调 Activity.checkSelfPermission（它本身就是 Context），
+    完全不碰 Build，也不依赖 androidx 的 PermissionChecker。
+    """
     try:
         from jnius import autoclass  # type: ignore
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
         activity = PythonActivity.mActivity
         if activity is None:
             return False, "拿不到 Activity，无法申请麦克风权限"
-        Build = autoclass("android.os.Build")
-        if Build.VERSION.SDK_INT < 23:
-            return True, ""
-        PermissionChecker = autoclass("androidx.core.content.PermissionChecker")
+        PERM = "android.permission.RECORD_AUDIO"
         PackageManager = autoclass("android.content.pm.PackageManager")
-        granted = PermissionChecker.checkSelfPermission(
-            activity, "android.permission.RECORD_AUDIO")
-        if granted == PackageManager.PERMISSION_GRANTED:
-            return True, ""
-        # 异步申请：requestPermissions 后用户点允许，下次录音即可用
-        # 用 autoclass 建字符串数组，不依赖 jarray（这个 p4a 版本没有它）
+        GRANTED = PackageManager.PERMISSION_GRANTED
         try:
-            StrArr = autoclass("[Ljava.lang.String;")
-            perms = StrArr(1)
-            perms[0] = "android.permission.RECORD_AUDIO"
+            granted = activity.checkSelfPermission(PERM)  # API 23+
         except Exception:
-            # 极老 pyjnius 的兜底
-            from jnius import jarray  # type: ignore
-            perms = jarray("java.lang.String")(["android.permission.RECORD_AUDIO"])
+            # 极老系统没这个方法，视为已授权，交给 MediaRecorder 自己判断
+            return True, ""
+        if granted == GRANTED:
+            return True, ""
+        # 未授权 → 弹系统授权框。数组构造多重兜底，绝不让这里再抛异常。
+        perms = None
+        try:
+            StrArr = autoclass("[Ljava/lang/String;")  # JNI 签名用斜杠
+            perms = StrArr(1)
+            perms[0] = PERM
+        except Exception:
+            try:
+                from jnius import jarray  # type: ignore
+                perms = jarray("java.lang.String")([PERM])
+            except Exception:
+                pass
+        if perms is None:
+            return False, ("无法弹出授权框，请到系统设置 → 应用 → 词库本 → 麦克风，"
+                           "选「仅使用期间允许」后重试")
         activity.requestPermissions(perms, 1001)
         return False, "请在弹出的授权框里点「允许」，然后再点一次录音"
     except Exception as e:
