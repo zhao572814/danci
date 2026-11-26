@@ -279,6 +279,7 @@ C_TEXT = get_color_from_hex("#1F2937")
 C_MUTED = get_color_from_hex("#6B7280")
 C_OK = get_color_from_hex("#059669")
 C_WARN = get_color_from_hex("#D97706")
+C_DANGER = get_color_from_hex("#DC2626")  # 删除此词（破坏性操作，红色警示）
 C_LINE = get_color_from_hex("#E5E7EB")
 
 Window.clearcolor = C_BG
@@ -841,6 +842,8 @@ class StudyScreen(Screen):
         nav.add_widget(_btn("跳过", bg=C_LINE, color=C_TEXT, on_press=self.skip))
         nav.add_widget(_btn("显示答案", bg=C_WARN, on_press=self.reveal))
         root.add_widget(nav)
+        # v31：认错的词可在背诵页当场删除，只删这条学习记录，基础词库不动
+        root.add_widget(_btn("删除此词（识别错了）", bg=C_DANGER, on_press=self.delete_current))
         root.add_widget(_btn("清空待背单词（不影响已背）", bg=C_LINE, color=C_WARN,
                              on_press=self.clear_inbox))
         self.add_widget(root)
@@ -935,6 +938,35 @@ class StudyScreen(Screen):
 
     def skip(self, *_):
         self.advance()
+
+    def delete_current(self, *_):
+        """当场删掉认错的词：只删这一条学习记录，基础词库/已背词完全不动。
+
+        删除后 idx 保持不变——列表少一条，原位置的下一条会自然补上来，
+        符合「删掉这个错的，看下一个」的直觉。
+        """
+        if not self.current:
+            toast("删除", "当前没有可删除的条目")
+            return
+        word = self.current.get("word", "")
+        wid = self.current.get("id")
+        if not wid:
+            toast("删除", "这条记录没有可删除的编号")
+            return
+
+        def do():
+            app = App.get_running_app()
+            try:
+                app.db.delete_word_permanently([wid])
+            except Exception as e:
+                toast("删除失败", f"{type(e).__name__}: {e}")
+                return
+            # 从本地列表同步移除，idx 不动即指向下一个词
+            self.words = [w for w in self.words if w.get("id") != wid]
+            self.show()
+            toast("已删除", f"「{word}」已从待背词库移除，基础词库不受影响")
+
+        confirm("删除此词", f"确定删除「{word}」吗？\n只从待背词库移除，基础词库和已背单词不受影响。", do)
 
     def reveal(self, *_):
         """显示答案：直接把答案写回输入框，不用弹窗。
