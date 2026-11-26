@@ -34,6 +34,10 @@ _IPA_BRACKET_RE = re.compile(r"\[[^\[\]\n]{1,48}\]")
 _ORDINAL_RE = re.compile(r"^\s*(?:\(?\d{1,3}\)?[\.、\)]|[①②③④⑤⑥⑦⑧⑨⑩]|[一二三四五六七八九十]+[、\.])\s*")
 # 中文/日文字符与中文标点（词表里的释义部分）
 _CJK_RE = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+")
+# 行内明确的分隔符：逗号 / 分号 / 顿号 / 竖线 / 制表符。
+# 有这些符号 => 一行多条，各算各的；没有 => 整行是一个词条（1 词=单词，多词=短语）。
+# 注意斜杠 / 不算分隔符——eat/have breakfast 是同一个词条的两种写法，不能拆。
+_ITEM_SEP_RE = re.compile(r"[,，;；、|｜\t]+")
 
 
 def _parse_entry_line(line: str) -> str | None:
@@ -63,45 +67,68 @@ def _parse_entry_line(line: str) -> str | None:
     return eng.strip()
 
 
-def detect_table_items(text: str) -> list[dict] | None:
-    """词表模式：文本像"每行一个词条"的单词/短语表时，按行整条识别。
+def _parse_entry_parts(line: str) -> list[str]:
+    """把一行拆成 1~N 个纯英文词条。
 
-    返回 None 表示"不是词表格式"，调用方应回退到文章模式（查词库挑词）。
-    这样既能整条认出词库里没有的短语，也不会把普通文章误切成词条。
+    * 有明确分隔符（逗号 / 分号 / 顿号 / 竖线 / Tab）时按符号拆成多条；
+    * 没有分隔符时整行就是一个词条——多个英文词就是短语，不再按空格拆成单词。
+    音标 /.../ [...]、词性缩写、中文释义仍然先整块剔除，不会混进词条。
+    """
+    s = _ORDINAL_RE.sub("", line or "")
+    if not s.strip():
+        return []
+    # 先整块剔音标，否则 /ˈkeəflɪ/ 里的拉丁字母会被当成英文词
+    s = _IPA_SLASH_RE.sub(" ", s)
+    s = _IPA_BRACKET_RE.sub(" ", s)
+    s = _POS_RE.sub(" ", s)
+    s = _CJK_RE.sub(" ", s)
+    out: list[str] = []
+    for chunk in _ITEM_SEP_RE.split(s):
+        eng = " ".join(m.group(0) for m in WORD_RE.finditer(chunk))
+        if eng.strip():
+            out.append(eng.strip())
+    return out
+
+
+def detect_table_items(text: str) -> list[dict] | None:
+    """词表 / 粘贴框模式：按行整条识别，一行没有符号分隔就是一个词条。
+
+    返回 None 表示"不是词表格式"，调用方回退到文章模式（查词库做最长匹配）。
+    单行也算——用户在粘贴框输入 `exercise for on hour` 这种短语时，必须整条
+    认出，不能再按空格切成 exercise / for / on / hour 四个单词。
     """
     lines = [ln for ln in (text or "").splitlines() if ln.strip()]
-    if len(lines) < 2:
+    if not lines:
         return None
-    parsed = [_parse_entry_line(ln) for ln in lines]
-    valid = [p for p in parsed if p]
-    if len(valid) < 2:
+    parsed = [_parse_entry_parts(ln) for ln in lines]
+    valid = [p for parts in parsed for p in parts]
+    if not valid:
         return None
-    # 词表特征：能解析出英文的行里，绝大多数是"短词条"（1~7 词）。
-    # 注意分母用 valid（有英文的行），不能用 lines——词表里常是"中文释义 +
-    # 英文词条"各占一行，中文行解析不出英文，算进分母会把词表误判成文章。
-    # 真正的文章每行是长句（>7 词），valid 里短行比例低，不会误判。
+    # 词表特征：解析出来的绝大多数是"短词条"（1~7 词）。真正的文章是长句
+    # （>7 词），短行比例低，会回退到文章模式——所以放宽到单行也不会误伤
+    # 整段英文文章。注意分母用 valid（真正解析出英文的词条），不能用 lines：
+    # 词表常是"中文释义行 + 英文词条行"交替，纯中文行解析不出英文。
     short = sum(1 for p in valid if len(p.split()) <= MAX_PHRASE_WORDS)
     if short / len(valid) < 0.85:
         return None
 
     out: list[dict] = []
     seen: set[str] = set()
-    for p in parsed:
-        if not p:
-            continue
-        words = [normalize_word(m.group(0)) for m in WORD_RE.finditer(p)]
-        words = [w for w in words if w]
-        if not words or len(words) > MAX_PHRASE_WORDS:
-            continue
-        # 单词/短语判定：词数 >1 即短语；虚词开头的短语（in class / on TV）
-        # 要整条保留，不能用 STOPWORDS 过滤掉 in/on。
-        hw = clean_headword(" ".join(words))
-        key = hw.lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        out.append({"headword": hw,
-                    "kind": "phrase" if len(words) > 1 else "word"})
+    for parts in parsed:
+        for p in parts:
+            words = [normalize_word(m.group(0)) for m in WORD_RE.finditer(p)]
+            words = [w for w in words if w]
+            if not words or len(words) > MAX_PHRASE_WORDS:
+                continue
+            # 词数 >1 即短语；虚词开头的短语（in class / on TV）整条保留，
+            # 不能用 STOPWORDS 过滤掉 in/on。
+            hw = clean_headword(" ".join(words))
+            key = hw.lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append({"headword": hw,
+                        "kind": "phrase" if len(words) > 1 else "word"})
     return out or None
 
 

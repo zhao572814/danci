@@ -76,6 +76,34 @@ def _read_asset_bytes(am, asset_path: str) -> bytes:
             pass
 
 
+def _upscale_for_ocr(bitmap, BitmapClass):
+    """把偏小的图片放大后再识别，提升手机截图 / 微信压缩图的小字识别率。
+
+    tesseract 对文字高度 <20px 的图识别率明显下降，而相册缩略图、聊天压缩过的
+    截图经常就是这种尺寸。这里只做一次标准 Android Bitmap 缩放：
+      * 最长边 <600px 视为图标/无效图，不动；
+      * 最长边 >=1800px 已经够清晰，不动（避免无谓耗时和内存）；
+      * 其余放大到约 2000px（最多 2.5 倍），双线性插值。
+    任何异常都返回原图，绝不影响识别主流程。
+    """
+    try:
+        w = int(bitmap.getWidth())
+        h = int(bitmap.getHeight())
+        longest = max(w, h)
+        if longest < 600 or longest >= 1800:
+            return bitmap
+        scale = min(2.5, 2000.0 / longest)
+        nw, nh = int(w * scale), int(h * scale)
+        scaled = BitmapClass.createScaledBitmap(bitmap, nw, nh, True)
+        if scaled is not None:
+            _log(f"图片放大：{w}x{h} -> {nw}x{nh}")
+            return scaled
+        return bitmap
+    except Exception as e:
+        _log(f"图片放大跳过（用原图）：{type(e).__name__}: {e}")
+        return bitmap
+
+
 def _ensure_traineddata() -> str:
     """确保私有目录里有 chi_sim + eng 两个训练数据，返回 tesseract 数据根目录。
 
@@ -141,6 +169,7 @@ def extract_text(data: bytes) -> tuple[bool, str, str]:
         from jnius import autoclass  # type: ignore
         TessBaseAPI = autoclass("com.googlecode.tesseract.android.TessBaseAPI")
         BitmapFactory = autoclass("android.graphics.BitmapFactory")
+        Bitmap = autoclass("android.graphics.Bitmap")
 
         root = _ensure_traineddata()
         # 图片字节写临时文件，让 Java BitmapFactory 解码（不碰 byte[]，避开 p4a 坑）
@@ -150,6 +179,8 @@ def extract_text(data: bytes) -> tuple[bool, str, str]:
         bitmap = BitmapFactory.decodeFile(tmp)
         if bitmap is None:
             return False, "", "图片解码失败，请换一张 JPG/PNG 图片试试"
+        # 偏小的图先放大，明显提升压缩截图里小字的识别率（异常自动用原图）
+        bitmap = _upscale_for_ocr(bitmap, Bitmap)
 
         tess = TessBaseAPI()
         # 优先中英双语；中文模型异常时降级为英文单语，保证纯英文图片仍可用
