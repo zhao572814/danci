@@ -104,6 +104,12 @@ def _upscale_for_ocr(bitmap, BitmapClass):
         return bitmap
 
 
+def _english_score(text: str) -> int:
+    """统计文本里成形的英文词块数，用于比较两次 OCR 结果谁更有用。"""
+    import re
+    return len(re.findall(r"[A-Za-z]{2,}", text or ""))
+
+
 def _ensure_traineddata() -> str:
     """确保私有目录里有 chi_sim + eng 两个训练数据，返回 tesseract 数据根目录。
 
@@ -179,8 +185,6 @@ def extract_text(data: bytes) -> tuple[bool, str, str]:
         bitmap = BitmapFactory.decodeFile(tmp)
         if bitmap is None:
             return False, "", "图片解码失败，请换一张 JPG/PNG 图片试试"
-        # 偏小的图先放大，明显提升压缩截图里小字的识别率（异常自动用原图）
-        bitmap = _upscale_for_ocr(bitmap, Bitmap)
 
         tess = TessBaseAPI()
         # 优先中英双语；中文模型异常时降级为英文单语，保证纯英文图片仍可用
@@ -199,10 +203,28 @@ def extract_text(data: bytes) -> tuple[bool, str, str]:
             lang = "eng"
         if not ok:
             raise RuntimeError("OCR 引擎初始化失败（训练数据路径或模型不对）")
+        # 原图优先——与上一版行为完全一致，保证以前认得好的图不会变差
         tess.setImage(bitmap)
-        text = tess.getUTF8Text() or ""
-        text = str(text).strip()
-        _log(f"识别完成：lang={lang}，{len(text)} 字符")
+        text = str(tess.getUTF8Text() or "").strip()
+        base_score = _english_score(text)
+        _log(f"原图识别：lang={lang}，{len(text)} 字符，英文词块 {base_score}")
+
+        # 只有原图读出的英文明显偏少、且图片偏小时，才再试一次放大图，
+        # 取英文更多的那份。放大失败/无改善都用原图结果，不引入新风险。
+        if base_score < 12:
+            try:
+                big = _upscale_for_ocr(bitmap, Bitmap)
+                if big is not bitmap:
+                    tess.setImage(big)
+                    text2 = str(tess.getUTF8Text() or "").strip()
+                    score2 = _english_score(text2)
+                    _log(f"放大图重试：{len(text2)} 字符，英文词块 {score2}")
+                    if score2 > base_score:
+                        text = text2
+                        _log("采用放大图结果")
+            except Exception as e:
+                _log(f"放大重试跳过（用原图）：{type(e).__name__}: {e}")
+
         if not text:
             return False, "", "图片里没识别出文字，请换一张更清晰、文字更大的图片"
         return True, text, ""

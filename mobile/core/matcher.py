@@ -34,10 +34,11 @@ _IPA_BRACKET_RE = re.compile(r"\[[^\[\]\n]{1,48}\]")
 _ORDINAL_RE = re.compile(r"^\s*(?:\(?\d{1,3}\)?[\.、\)]|[①②③④⑤⑥⑦⑧⑨⑩]|[一二三四五六七八九十]+[、\.])\s*")
 # 中文/日文字符与中文标点（词表里的释义部分）
 _CJK_RE = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+")
-# 行内明确的分隔符：逗号 / 分号 / 顿号 / 竖线 / 制表符。
-# 有这些符号 => 一行多条，各算各的；没有 => 整行是一个词条（1 词=单词，多词=短语）。
+# 行内分隔符：逗号 / 分号 / 冒号 / 顿号 / 竖线 / 制表符 / 连续两个及以上空格。
+# 有这些符号 => 一行多条，各算各的；只有单个空格 => 整行是一个词条。
 # 注意斜杠 / 不算分隔符——eat/have breakfast 是同一个词条的两种写法，不能拆。
-_ITEM_SEP_RE = re.compile(r"[,，;；、|｜\t]+")
+# 连续 2 个以上空格也拆：教材/截图里常用它隔开相邻词条（work hard  once a week）。
+_ITEM_SEP_RE = re.compile(r"[,，;；:：、|｜\t]| {2,}|\u3000+")
 
 
 def _parse_entry_line(line: str) -> str | None:
@@ -70,8 +71,8 @@ def _parse_entry_line(line: str) -> str | None:
 def _parse_entry_parts(line: str) -> list[str]:
     """把一行拆成 1~N 个纯英文词条。
 
-    * 有明确分隔符（逗号 / 分号 / 顿号 / 竖线 / Tab）时按符号拆成多条；
-    * 没有分隔符时整行就是一个词条——多个英文词就是短语，不再按空格拆成单词。
+    * 有明确分隔符（逗号/分号/冒号/顿号/竖线/Tab/连续两个及以上空格）时拆成多条；
+    * 只有单个空格时整行是一个词条——多个英文词就是短语，不再按空格拆成单词。
     音标 /.../ [...]、词性缩写、中文释义仍然先整块剔除，不会混进词条。
     """
     s = _ORDINAL_RE.sub("", line or "")
@@ -81,10 +82,12 @@ def _parse_entry_parts(line: str) -> list[str]:
     s = _IPA_SLASH_RE.sub(" ", s)
     s = _IPA_BRACKET_RE.sub(" ", s)
     s = _POS_RE.sub(" ", s)
-    s = _CJK_RE.sub(" ", s)
     out: list[str] = []
+    # 注意顺序：先按"原文本里的分隔符"拆条，再在每段里剔除中文。
+    # 若反过来先剔中文再拆，中文替换成的空格会被误判成"双空格分隔"。
     for chunk in _ITEM_SEP_RE.split(s):
-        eng = " ".join(m.group(0) for m in WORD_RE.finditer(chunk))
+        eng = " ".join(m.group(0) for m in WORD_RE.finditer(
+            " ".join(_CJK_RE.split(chunk))))
         if eng.strip():
             out.append(eng.strip())
     return out
@@ -253,16 +256,29 @@ def _looks_like_garbage(headword: str) -> bool:
 
 
 def filter_garbage(items: list[dict]) -> list[dict]:
-    """剔除明显是 OCR 乱码的「单词」候选；短语和词库里已有的词一律保留。
+    """剔除明显是 OCR 乱码的候选；词库里已有的词/短语一律保留。
 
     只在 annotate 之后调用：in_library / pending 为真说明能在库里查到，
     即使是缩写或特殊写法也要保留。库外的异常块才丢。
+
+    v33 起单行短语也会整条识别，乱码串（KRK TH ERK g k ...）因此可能被当成
+    一条短语。这里补一道：库外短语里过半单词是乱码块时整条丢掉。阈值取 0.6
+    是为了不误伤 play NBA 这类含正常缩写的新短语。
     """
     kept = []
     for it in items:
-        if it.get("kind") == "word" and not it.get("in_library") and not it.get("pending"):
-            if _looks_like_garbage(it.get("headword", "")):
-                continue
+        if it.get("in_library") or it.get("pending"):
+            kept.append(it)
+            continue
+        hw = it.get("headword", "")
+        if it.get("kind") == "phrase":
+            words = hw.split()
+            if len(words) >= 2:
+                bad = sum(1 for w in words if _looks_like_garbage(w))
+                if bad / len(words) >= 0.6:
+                    continue
+        elif _looks_like_garbage(hw):
+            continue
         kept.append(it)
     return kept
 

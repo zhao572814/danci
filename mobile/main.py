@@ -657,6 +657,19 @@ class ImportScreen(Screen):
         opt2.add_widget(self.chk_stop)
         opt2.add_widget(_btn("识别文本", bg=C_OK, size=14, on_press=self.recognize))
         root.add_widget(opt2)
+        # v33：中文查英文——不依赖文件/图片/粘贴，直接按中文释义搜词库
+        opt3 = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(44))
+        self.cn_input = TextInput(
+            font_name=FONT, font_size=sp(14), multiline=False,
+            hint_text="输入中文意思查词库，如：锻炼 / 参加 / 期待",
+            background_color=C_CARD, foreground_color=C_TEXT)
+        opt3.add_widget(self.cn_input)
+        btn_cn = _btn("中文查英文", bg=C_PRIMARY, size=13, height=44,
+                      on_press=self.search_cn)
+        btn_cn.size_hint_x = None
+        btn_cn.width = dp(112)
+        opt3.add_widget(btn_cn)
+        root.add_widget(opt3)
         self.hint = _label("识别后在此勾选要背的条目", 13, C_MUTED)
         root.add_widget(self.hint)
         self.list = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
@@ -740,8 +753,49 @@ class ImportScreen(Screen):
               "点「导入文件」，可直接选：\n"
               "① 图片（JPG/PNG）——内置离线 OCR 自动识别英文并挑词，不联网；\n"
               "② TXT / 文字版 PDF——直接读出文字；\n"
-              "③ 或把英文粘贴到输入框，点「识别文本」。\n"
+              "③ 或把英文粘贴到输入框，点「识别文本」；\n"
+              "④ 想起中文意思也能查：在「中文查英文」输入中文，直接把词库里对应的英文挑出来。\n"
               "图片识别需要几秒（首次稍慢）。若识别不准确，请换清晰、字大的图片。")
+
+    def search_cn(self, *_):
+        """按中文释义在基础词库里查英文单词/短语，结果进同一个候选列表。
+
+        与「识别文本」并列：不依赖文件、PDF、图片或粘贴，想起哪个中文意思
+        就直接查。查到的都是词库正式条目，勾选后走同一个「加入待背词库」。
+        """
+        app = App.get_running_app()
+        q = (self.cn_input.text or "").strip()
+        if not q:
+            toast("中文查词", "先输入中文意思，比如：锻炼 / 参加 / 期待")
+            return
+        if not app.db:
+            toast("中文查词", "词库还没准备好，请稍后再试")
+            return
+        try:
+            rows = app.db.search_by_translation(q, limit=200)
+        except Exception as e:
+            toast("中文查词", f"查询失败：{type(e).__name__}: {e}")
+            return
+        items = []
+        for r in rows:
+            hw = (r.get("headword") or "").strip()
+            if not hw:
+                continue
+            items.append({
+                "headword": hw,
+                "kind": r.get("kind") or "word",
+                "entry_id": r.get("id"),
+                "in_library": True,
+                "phonetic": r.get("phonetic") or "",
+                "translation": r.get("translation") or "",
+                "pending": False,
+                "checked": True,
+                "show_translation": True,   # 让候选里能看到中文，便于确认是不是要找的
+            })
+        self.candidates = items
+        self.render_candidates()
+        self.hint.text = (f"中文「{q}」查到 {len(items)} 条（最贴切的排前面），勾选后点「加入待背词库」"
+                          if items else f"没找到含「{q}」的词条，换个说法试试")
 
     def recognize(self, *_):
         app = App.get_running_app()
@@ -762,7 +816,9 @@ class ImportScreen(Screen):
     def render_candidates(self):
         self.list.clear_widgets()
         for it in self.candidates:
-            row = BoxLayout(spacing=dp(8), size_hint_y=None, height=dp(46))
+            taller = bool(it.get("show_translation") and it.get("translation"))
+            row = BoxLayout(spacing=dp(8), size_hint_y=None,
+                            height=dp(56) if taller else dp(46))
             cb = Button(text="☑" if it.get("checked", True) else "☐", font_name=FONT,
                         font_size=sp(20), background_color=C_CARD, color=C_OK,
                         size_hint_x=None, width=dp(46))
@@ -772,8 +828,13 @@ class ImportScreen(Screen):
             cb.bind(on_press=toggle)
             row.add_widget(cb)
             tag = "短语" if it["kind"] == "phrase" else "单词"
+            # 中文查词的结果带释义，显示出来便于确认是不是要找的那条
+            extra = ""
+            if taller:
+                trans = it["translation"]
+                extra = "  — " + (trans[:24] + "…" if len(trans) > 24 else trans)
             mark = "" if it.get("in_library") else "（基础库未收录，可先去基础词库补录）"
-            lbl = _label(f"{it['headword']}  [{tag}]{mark}", 14)
+            lbl = _label(f"{it['headword']}  [{tag}]{extra}{mark}", 14)
             row.add_widget(lbl)
             self.list.add_widget(row)
             it["checked"] = True
@@ -784,7 +845,9 @@ class ImportScreen(Screen):
         if not chosen:
             toast("加入待背", "没有勾选任何条目")
             return
-        bid, ids, new, skipped = app.db.import_items(chosen, "粘贴识别", source="paste")
+        batch_name = ("中文查词" if any(it.get("show_translation") for it in chosen)
+                      else "粘贴识别")
+        bid, ids, new, skipped = app.db.import_items(chosen, batch_name, source="paste")
         self.candidates = []
         self.list.clear_widgets()
         self.text.text = ""

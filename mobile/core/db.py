@@ -528,6 +528,27 @@ class VocabDB:
             rows = con.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
+    def search_by_translation(self, query: str, limit: int = 200) -> list[dict]:
+        """按中文释义查英文词条，最贴切的排最前。
+
+        给「只记得中文意思、想不起英文」的场景用：匹配位置越靠前、释义越短
+        越可能是用户要找的词条（如搜"参加"，`参加；参与` 的 take part in
+        会排在"联合抵制（不参加…）"这类长释义前面）。
+        """
+        q = (query or "").strip()
+        if not q:
+            return []
+        sql = (
+            "SELECT d.*, "
+            "(SELECT COUNT(*) FROM words w WHERE w.entry_id=d.id) AS ref_count "
+            "FROM dict_entries d WHERE d.translation LIKE ? "
+            "ORDER BY instr(d.translation, ?) ASC, LENGTH(d.translation) ASC, "
+            "d.kind DESC, d.headword COLLATE NOCASE ASC LIMIT ?"
+        )
+        with self._connect() as con:
+            rows = con.execute(sql, (f"%{q}%", q, limit)).fetchall()
+        return [dict(r) for r in rows]
+
     def entry_stats(self) -> dict:
         with self._connect() as con:
             total = con.execute("SELECT COUNT(*) FROM dict_entries").fetchone()[0]
